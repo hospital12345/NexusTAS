@@ -178,14 +178,14 @@ it to your clipboard. The format looks like:
 programmatically:
 
 ```lua
-_G.importReplay(([[HERE'S YOUR STRING]])
+_G.importReplay(([[HERE'S YOUR STRING]]))
 ```
 
 Or, in environments that expose them:
 
 ```lua
-getgenv().importReplay([[HERE'S YOUR STRING]])
-shared.importReplay(([[HERE'S YOUR STRING]])
+getgenv().importReplay([[HERE'S YOUR STRING]]))
+shared.importReplay(([[HERE'S YOUR STRING]]))
 ```
 
 The string must be a table literal that evaluates to an array of frame objects.
