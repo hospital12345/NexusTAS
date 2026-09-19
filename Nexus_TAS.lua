@@ -1260,6 +1260,10 @@ do
     subtitle.Parent = header
     reg(subtitle, "subtext", "TextColor3")
 
+    -- === MINIMIZE STATE ===
+    local isMinimized = false
+    local uiChrome = {}
+
     local function headerBtn(txt, order, onClick, hoverColorKey)
         local b = Instance.new("TextButton")
         b.Size = UDim2.new(0, 30, 0, 30)
@@ -1288,7 +1292,11 @@ do
     end
 
     headerBtn("—", 0, function()
-        local targetH = (win.Size.Y.Offset > 50) and 46 or 520
+        isMinimized = not isMinimized
+        for _, obj in ipairs(uiChrome) do
+            if obj and obj.Parent then obj.Visible = not isMinimized end
+        end
+        local targetH = isMinimized and 46 or 520
         tween(win, 0.25, {Size = UDim2.new(0, 580, 0, targetH)}, Enum.EasingStyle.Quart)
     end, "buttonHover")
 
@@ -1308,6 +1316,7 @@ do
     corner(tabBar, 10)
     reg(tabBar, "panelAlt")
     stroke(tabBar, C.border, 1)
+    table.insert(uiChrome, tabBar)
 
     local tabList = Instance.new("Frame")
     tabList.Size = UDim2.new(1, 0, 1, 0)
@@ -1324,6 +1333,7 @@ do
     content.Size = UDim2.new(1, -28, 1, -166)
     content.BackgroundTransparency = 1
     content.Parent = win
+    table.insert(uiChrome, content)
 
     local pages = {}
     local function makeTab(name, label)
@@ -1817,6 +1827,7 @@ do
     corner(status, 10)
     reg(status, "panelAlt")
     stroke(status, C.border, 1)
+    table.insert(uiChrome, status)
 
     local function makeStat(xScale, xOff, width, labelText)
         local wrap = Instance.new("Frame")
