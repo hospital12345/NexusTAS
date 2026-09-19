@@ -26,7 +26,6 @@ local DEFAULT_BINDS = {
     create       = Enum.KeyCode.Two,
     test         = Enum.KeyCode.Three,
     edittest     = Enum.KeyCode.Four,
-    record       = Enum.KeyCode.R,
     recordMouse  = Enum.UserInputType.MouseButton3,
     tick         = Enum.KeyCode.V,
     seekBack     = Enum.KeyCode.Q,
@@ -927,8 +926,6 @@ UserInputService.InputBegan:Connect(function(input, processed)
     elseif inputMatchesBind(input, keybinds.create) then enterCreate()
     elseif inputMatchesBind(input, keybinds.test) then enterTest()
     elseif inputMatchesBind(input, keybinds.edittest) then enterEdittest()
-    elseif inputMatchesBind(input, keybinds.record) then
-        if state == "create" or state == "edittest" then toggleRecording() end
     elseif inputMatchesBind(input, keybinds.removePauses) then
         if state == "create" and isPaused then removePauses() end
     elseif inputMatchesBind(input, keybinds.seekBack) then
@@ -1464,7 +1461,6 @@ do
             {key="create",       label="Create mode"},
             {key="test",         label="Test mode"},
             {key="edittest",     label="Editable Test mode"},
-            {key="record",       label="Start / Pause recording"},
             {key="recordMouse",  label="Start / Pause recording (mouse)"},
             {key="edittestPlay", label="Editable Test play / pause"},
             {key="tick",         label="Single physics tick"},
@@ -1788,14 +1784,14 @@ do
             "",
             "Quick Start:",
             "  1. Enter Create mode",
-            "  2. Press the Record bind to begin recording",
+            "  2. Press MMB (middle mouse) to begin recording",
             "  3. Perform your actions",
-            "  4. Press the Record bind again to pause",
+            "  4. Press MMB again to pause",
             "  5. Switch to Test mode to replay the recording",
             "",
             "Editing:",
             "  Use seek / step binds to navigate the recording",
-            "  Press Record bind while paused to continue recording",
+            "  Press MMB while paused to continue recording",
             "  Remove Pauses strips idle frames",
             "",
             "Customization:",
@@ -2060,7 +2056,7 @@ if not VIM then
     warn("[NexusTAS] VirtualInputManager unavailable: input replay disabled.")
 end
 print("[NexusTAS] Default binds: 1 Idle | 2 Create | 3 Test | 4 Edittest")
-print("[NexusTAS] MMB / R - record toggle | V - single tick")
+print("[NexusTAS] MMB - record toggle | V - single tick")
 print("[NexusTAS] Q / E - seek (hold) | F / G - frame step")
 print("[NexusTAS] L - remove pauses | Space - play/pause in edittest | C - camera lock")
 print("[NexusTAS] F3 - clear | F4 - save to clipboard | F2 - toggle GUI | F5 - toggle HUD")
