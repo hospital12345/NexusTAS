@@ -112,7 +112,7 @@ the editing mode.
 ### Recording
 
 1. Enter **Create** mode.
-2. Press the **Record** bind (default: `R` or middle mouse button).
+2. Press the **Record** bind (default: middle mouse button).
 3. Your character is released, movement is enabled, and recording begins.
 4. Perform the movement / actions you want to record.
 5. Press the **Record** bind again to pause — the character is anchored and the frame
@@ -178,14 +178,14 @@ it to your clipboard. The format looks like:
 programmatically:
 
 ```lua
-_G.importReplay(<string>)
+_G.importReplay(([[HERE'S YOUR STRING]])
 ```
 
 Or, in environments that expose them:
 
 ```lua
-getgenv().importReplay(<string>)
-shared.importReplay(<string>)
+getgenv().importReplay([[HERE'S YOUR STRING]])
+shared.importReplay(([[HERE'S YOUR STRING]])
 ```
 
 The string must be a table literal that evaluates to an array of frame objects.
