@@ -465,7 +465,12 @@ local function toggleRecording()
         setAnchored(true)
         return
     end
-    local targetAnim = captureTargetAnim()
+
+    -- === СНАЧАЛА сохраняем точную позу, в которой игрок стоял на паузе ===
+    -- Берём анимации из frozenFrame (снимок паузы) или из последнего кадра
+    local resumeSource = frozenFrame or (playIndex > 0 and recordedData[playIndex])
+    local capturedAnims = (resumeSource and resumeSource.anims) or {}
+
     clearFrozen()
     pendingInputs = {}
     if playIndex < #recordedData then
@@ -476,6 +481,8 @@ local function toggleRecording()
     else recordingClock = 0 end
     local currentCF = ROOT.CFrame
     local anims = capturePlayingAnims()
+    -- если живых анимаций нет — берём захваченные, чтобы не потерять позу
+    if #anims == 0 and #capturedAnims > 0 then anims = capturedAnims end
     local vNow = ROOT.AssemblyLinearVelocity
     local rvNow = ROOT.AssemblyAngularVelocity
     local stNow = HUMAN and HUMAN:GetState() or Enum.HumanoidStateType.Freefall
@@ -493,23 +500,47 @@ local function toggleRecording()
         HUMAN.AutoRotate = originalAutoRotate
         HUMAN:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
     end
+
+    -- === ШАГ 1: выставить точную позу, пока Animate ещё выключен ===
+    -- noFade=true, чтобы анимации встали мгновенно в сохранённый TimePosition
+    if #capturedAnims > 0 then
+        applyAnimations(capturedAnims, true)
+        freezeAnimations()
+    end
+
+    -- === ШАГ 2: снять якорь и восстановить физику ===
     setAnchored(false)
     local lastFrame = recordedData[playIndex]
     applyVelocityFromFrame(lastFrame, 0, nil)
     if HUMAN and lastFrame.humState then
         pcall(function() HUMAN:ChangeState(lastFrame.humState) end)
     end
+
+    -- === ШАГ 3: дать физике проглотить позу один кадр ===
+    RunService.Heartbeat:Wait()
+
+    -- === ШАГ 4: теперь можно включать Animate. Он заново стартует свои треки с 0,
+    -- но мы их тут же синхронизируем через pendingAnimSync (см. Heartbeat) ===
     setAnimateEnabled(true)
     if HUMAN then HUMAN.WalkSpeed = originalWalkSpeed end
-    if targetAnim then
-        pendingAnimSync = {
-            animId = targetAnim.animId,
-            timePos = targetAnim.timePos,
-            speed = targetAnim.speed,
-            frames = 60,
-        }
+
+    -- Собираем цели синхронизации для ВСЕХ захваченных анимаций, а не для одной
+    if #capturedAnims > 0 then
+        local targets = {}
+        for _, a in ipairs(capturedAnims) do
+            if a.id then
+                targets[a.id] = {
+                    timePosition = a.timePosition or 0,
+                    speed = a.speed,
+                    synced = false,
+                }
+            end
+        end
+        if next(targets) then
+            pendingAnimSync = { targets = targets, frames = 120 }
+        end
     end
-    RunService.Heartbeat:Wait()
+
     RunService.RenderStepped:Wait()
     if HUMAN then HUMAN:SetStateEnabled(Enum.HumanoidStateType.Jumping, true) end
     isRecording = true; isPaused = false; transitioning = false
@@ -558,9 +589,91 @@ local function stepSeek(dt)
     end
 end
 
+-- === REPAIR ANIMATIONS ===
+-- Строит для каждого humState эталонный AnimationId (самый частый в записи)
+-- и заменяет "неправильные" анимации на эталон, сохраняя TimePosition
+-- по соседним кадрам того же состояния.
+local function repairRecordedAnimations()
+    if #recordedData < 3 then return 0 end
+
+    -- Шаг 1. Статистика: stateName -> { animId -> count }
+    local stats = {}
+    for _, frame in ipairs(recordedData) do
+        local st = frame.humState
+        if st and frame.anims then
+            local name = st.Name
+            stats[name] = stats[name] or {}
+            for _, anim in ipairs(frame.anims) do
+                if anim.id then
+                    stats[name][anim.id] = (stats[name][anim.id] or 0) + 1
+                end
+            end
+        end
+    end
+
+    -- Шаг 2. Для каждого состояния выбираем эталон (самый частый)
+    local reference = {}
+    for name, counts in pairs(stats) do
+        local bestId, bestCount = nil, 0
+        for id, c in pairs(counts) do
+            if c > bestCount then bestId, bestCount = id, c end
+        end
+        reference[name] = bestId
+    end
+
+    -- Шаг 3. Проходим по кадрам и заменяем несоответствия
+    local repaired = 0
+    for i, frame in ipairs(recordedData) do
+        local st = frame.humState
+        if st then
+            local name = st.Name
+            local refId = reference[name]
+            if refId then
+                local hasRef = false
+                if frame.anims then
+                    for _, anim in ipairs(frame.anims) do
+                        if anim.id == refId then hasRef = true; break end
+                    end
+                end
+                if not hasRef then
+                    -- Ищем TimePosition эталона у ближайших соседей того же состояния
+                    local refTimePos, refSpeed = 0, 1
+                    for j = i - 1, math.max(1, i - 60), -1 do
+                        local f = recordedData[j]
+                        if f and f.humState and f.humState.Name == name and f.anims then
+                            for _, anim in ipairs(f.anims) do
+                                if anim.id == refId then
+                                    refTimePos = (anim.timePosition or 0)
+                                        + RECORD_INTERVAL * (i - j)
+                                    refSpeed = anim.speed or 1
+                                    break
+                                end
+                            end
+                            if refSpeed then break end
+                        end
+                    end
+                    frame.anims = {
+                        { id = refId, timePosition = refTimePos, speed = refSpeed }
+                    }
+                    repaired = repaired + 1
+                end
+            end
+        end
+    end
+
+    return repaired
+end
+
 local function enterTest()
     if state == "test" then goIdle() return end
     if #recordedData == 0 then return end
+
+    -- Чиним анимации перед воспроизведением
+    local fixed = repairRecordedAnimations()
+    if fixed > 0 then
+        print(("[NexusTAS] Repaired %d frames before Test"):format(fixed))
+    end
+
     clearFrozen()
     setAnimateEnabled(false); setAutoRotate(false)
     pendingAnimSync = nil
@@ -589,6 +702,13 @@ end
 local function enterEdittest()
     if state == "edittest" then goIdle() return end
     if #recordedData == 0 then return end
+
+    -- Чиним анимации перед воспроизведением
+    local fixed = repairRecordedAnimations()
+    if fixed > 0 then
+        print(("[NexusTAS] Repaired %d frames before Edittest"):format(fixed))
+    end
+
     clearFrozen(); setAnimateEnabled(false); setAutoRotate(false)
     pendingAnimSync = nil
     state="edittest"; isRecording=false; isPaused=true; isSeeking=false
@@ -844,6 +964,7 @@ local function importRecording(str)
     if not fn then return false end
     local ok, result = pcall(fn)
     if not ok or type(result) ~= "table" then return false end
+
     local newData = {}
     for i = 1, #result do
         local f = result[i]
@@ -859,12 +980,20 @@ local function importRecording(str)
         end
     end
     if #newData == 0 then return false end
+
     if state ~= "idle" then goIdle() end
     recordedData = newData
     playIndex = 0
     recordingClock = recordedData[#recordedData].t or 0
     frozenFrame = nil; pendingAnimSync = nil; pendingInputs = {}
     lastInputFrameIndex = 0; clearFrozen()
+
+    -- Чиним анимации после импорта
+    local fixed = repairRecordedAnimations()
+    if fixed > 0 then
+        print(("[NexusTAS] Repaired %d frames on import"):format(fixed))
+    end
+
     return true
 end
 
@@ -975,33 +1104,51 @@ end)
 -- === MAIN LOOP ===
 RunService.Heartbeat:Connect(function(dt)
     if pendingAnimSync and ANIMATOR then
-        local applied = false
-        for _, track in pairs(ANIMATOR:GetPlayingAnimationTracks()) do
-            if track.IsPlaying and track.Animation
-                and track.Animation.AnimationId == pendingAnimSync.animId then
-                track.TimePosition = pendingAnimSync.timePos
-                if pendingAnimSync.speed then track:AdjustSpeed(pendingAnimSync.speed) end
-                applied = true; break
+        local targets = pendingAnimSync.targets
+        if targets then
+            -- Пытаемся поймать ВСЕ ожидаемые треки, которые Animate только что запустил
+            for _, track in pairs(ANIMATOR:GetPlayingAnimationTracks()) do
+                if track.IsPlaying and track.Animation and track.Animation.AnimationId then
+                    local target = targets[track.Animation.AnimationId]
+                    if target and not target.synced then
+                        track.TimePosition = target.timePosition
+                        if target.speed then track:AdjustSpeed(target.speed) end
+                        target.synced = true
+                    end
+                end
             end
-        end
-        if applied then pendingAnimSync = nil
+            -- Снимаем синхронизацию только когда ВСЕ анимации пойманы
+            local allSynced = true
+            for _, t in pairs(targets) do
+                if not t.synced then allSynced = false; break end
+            end
+            if allSynced then
+                pendingAnimSync = nil
+            else
+                pendingAnimSync.frames = pendingAnimSync.frames - 1
+                if pendingAnimSync.frames <= 0 then pendingAnimSync = nil end
+            end
         else
-            pendingAnimSync.frames = pendingAnimSync.frames - 1
-            if pendingAnimSync.frames <= 0 then pendingAnimSync = nil end
+            pendingAnimSync = nil
         end
     end
+
     if transitioning then return end
+
     if isRecording and not manualTick then
         recordingClock = recordingClock + dt
         recordFrame()
     end
+
     if state == "test" then updateTest()
     elseif state == "edittest" then updateEdittest() end
+
     if (state == "create" or state == "edittest") and isPaused and isSeeking then stepSeek(dt) end
 
     local shouldAnchor = (state == "create" or state == "edittest")
         and isPaused and not isRecording and not manualTick
     if ROOT and ROOT.Anchored ~= shouldAnchor then ROOT.Anchored = shouldAnchor end
+
     if shouldAnchor then
         local frame = frozenFrame
         if not frame and playIndex >= 1 then frame = recordedData[playIndex] end
@@ -1009,6 +1156,7 @@ RunService.Heartbeat:Connect(function(dt)
         if frame then applyVelocityFromFrame(frame, 0, nil) end
         if isPaused and not isSeeking then freezeAnimations() end
     end
+
     local disableAutoRotate = false
     if state == "create" and isPaused then disableAutoRotate = true
     elseif state == "test" then disableAutoRotate = true
