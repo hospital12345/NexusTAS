@@ -589,73 +589,107 @@ local function stepSeek(dt)
     end
 end
 
--- === REPAIR ANIMATIONS ===
--- Строит для каждого humState эталонный AnimationId (самый частый в записи)
--- и заменяет "неправильные" анимации на эталон, сохраняя TimePosition
--- по соседним кадрам того же состояния.
+
+
+-- Умная починка: применяется только к состояниям, где есть явная
+-- единственная доминирующая анимация (>= 85%), и продвигает timePosition
+-- только если персонаж реально двигался в этом кадре.
 local function repairRecordedAnimations()
+    if type(recordedData) ~= "table" then return 0 end
     if #recordedData < 3 then return 0 end
 
-    -- Шаг 1. Статистика: stateName -> { animId -> count }
+    -- Шаг 1. Статистика: stateName -> { counts = {animId -> n}, total = n }
     local stats = {}
     for _, frame in ipairs(recordedData) do
-        local st = frame.humState
-        if st and frame.anims then
-            local name = st.Name
-            stats[name] = stats[name] or {}
-            for _, anim in ipairs(frame.anims) do
-                if anim.id then
-                    stats[name][anim.id] = (stats[name][anim.id] or 0) + 1
+        if type(frame) == "table" then
+            local st = frame.humState
+            local anims = frame.anims
+            if st and st.Name and type(anims) == "table" then
+                local name = st.Name
+                local entry = stats[name]
+                if not entry then
+                    entry = { counts = {}, total = 0 }
+                    stats[name] = entry
+                end
+                for _, anim in ipairs(anims) do
+                    if type(anim) == "table" and anim.id ~= nil then
+                        entry.counts[anim.id] = (entry.counts[anim.id] or 0) + 1
+                        entry.total = entry.total + 1
+                    end
                 end
             end
         end
     end
 
-    -- Шаг 2. Для каждого состояния выбираем эталон (самый частый)
+    -- Шаг 2. Эталон для каждого состояния (только при доминантности >= 85%)
     local reference = {}
-    for name, counts in pairs(stats) do
-        local bestId, bestCount = nil, 0
-        for id, c in pairs(counts) do
-            if c > bestCount then bestId, bestCount = id, c end
+    for name, s in pairs(stats) do
+        local total = tonumber(s and s.total) or 0
+        if total > 0 then
+            local bestId, bestCount = nil, 0
+            for id, c in pairs(s.counts or {}) do
+                local cn = tonumber(c) or 0
+                if cn > bestCount then bestId, bestCount = id, cn end
+            end
+            if bestId ~= nil and bestCount > 0 and (bestCount / total) >= 0.85 then
+                reference[name] = bestId
+            end
         end
-        reference[name] = bestId
     end
 
-    -- Шаг 3. Проходим по кадрам и заменяем несоответствия
+    local MOVE_EPS = 0.5  -- studs/sec
+
+    -- Шаг 3. Починка
     local repaired = 0
     for i, frame in ipairs(recordedData) do
-        local st = frame.humState
-        if st then
-            local name = st.Name
-            local refId = reference[name]
-            if refId then
-                local hasRef = false
-                if frame.anims then
-                    for _, anim in ipairs(frame.anims) do
-                        if anim.id == refId then hasRef = true; break end
+        if type(frame) == "table" then
+            local st = frame.humState
+            if st and st.Name then
+                local name = st.Name
+                local refId = reference[name]
+                if refId ~= nil then
+                    local hasRef = false
+                    if type(frame.anims) == "table" then
+                        for _, anim in ipairs(frame.anims) do
+                            if type(anim) == "table" and anim.id == refId then
+                                hasRef = true; break
+                            end
+                        end
                     end
-                end
-                if not hasRef then
-                    -- Ищем TimePosition эталона у ближайших соседей того же состояния
-                    local refTimePos, refSpeed = 0, 1
-                    for j = i - 1, math.max(1, i - 60), -1 do
-                        local f = recordedData[j]
-                        if f and f.humState and f.humState.Name == name and f.anims then
-                            for _, anim in ipairs(f.anims) do
-                                if anim.id == refId then
-                                    refTimePos = (anim.timePosition or 0)
-                                        + RECORD_INTERVAL * (i - j)
-                                    refSpeed = anim.speed or 1
+                    if not hasRef then
+                        local refTimePos, refSpeed = 0, 1
+                        local found = false
+                        for j = i - 1, math.max(1, i - 60), -1 do
+                            local f = recordedData[j]
+                            if type(f) == "table" and f.humState
+                                and f.humState.Name == name
+                                and type(f.anims) == "table" then
+                                for _, anim in ipairs(f.anims) do
+                                    if type(anim) == "table" and anim.id == refId then
+                                        refTimePos = tonumber(anim.timePosition) or 0
+                                        refSpeed = tonumber(anim.speed) or 1
+                                        found = true
+                                        break
+                                    end
+                                end
+                                if found then
+                                    local vel = frame.velocity
+                                    local speed = 0
+                                    if typeof(vel) == "Vector3" then
+                                        speed = vel.Magnitude
+                                    end
+                                    if speed > MOVE_EPS then
+                                        refTimePos = refTimePos + RECORD_INTERVAL * (i - j)
+                                    end
                                     break
                                 end
                             end
-                            if refSpeed then break end
                         end
+                        frame.anims = {
+                            { id = refId, timePosition = refTimePos, speed = refSpeed }
+                        }
+                        repaired = repaired + 1
                     end
-                    frame.anims = {
-                        { id = refId, timePosition = refTimePos, speed = refSpeed }
-                    }
-                    repaired = repaired + 1
                 end
             end
         end
@@ -1401,7 +1435,7 @@ do
     subtitle.Position = UDim2.new(0, 148, 0, 0)
     subtitle.Size = UDim2.new(0, 200, 1, 0)
     subtitle.Font = Enum.Font.Gotham
-    subtitle.Text = "BETA V 1.0"
+    subtitle.Text = "BETA V 1.0.1"
     subtitle.TextSize = 12
     subtitle.TextColor3 = C.subtext
     subtitle.TextXAlignment = Enum.TextXAlignment.Left
