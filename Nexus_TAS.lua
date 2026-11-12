@@ -107,17 +107,46 @@ local replayingInputs = false
 local lastInputFrameIndex = 0
 local activeReplayInputs = {}
 
+-- === LEGIT MODE ===
+local legitMode = false
+local legit = {
+    active = false,
+    clone = nil,
+    cloneRoot = nil,
+    cloneHuman = nil,
+    cloneAnimator = nil,
+    cloneTracks = {},
+    sourceChar = nil,
+    sourceRoot = nil,
+    sourceHuman = nil,
+    sourceAnimator = nil,
+    sourceAnimate = nil,
+    savedParts = nil,
+    savedCameraSubject = nil,
+    lastJump = false,
+    swapped = false,
+    nativeAnim = false,
+    mirrorControls = false,
+    noMoveFrames = 0,
+    animateIds = nil,
+    nativeMissFrames = 0,
+    ignoreChars = setmetatable({}, { __mode = "k" }),
+}
+
 -- === ANIMATIONS ===
-local pendingAnimSync = nil
 local frozenTracks = {}
+local previewTracks = {}
 
 local function freezeAnimations()
     if not ANIMATOR then return end
     for _, track in pairs(ANIMATOR:GetPlayingAnimationTracks()) do
         if track.IsPlaying then
-            if not frozenTracks[track] then
+            if frozenTracks[track] == nil then
+                -- Store the REAL speed, including 0. Animate itself pauses some
+                -- states (climbing/idle on a truss) with speed 0; restoring them
+                -- as 1 broke climbing after a pause/unpause.
                 local s = track.Speed
-                if not s or s <= 0 then s = 1 end
+                if s == nil then s = 1 end
                 frozenTracks[track] = { speed = s }
             end
             if track.Speed ~= 0 then track:AdjustSpeed(0) end
@@ -126,6 +155,27 @@ local function freezeAnimations()
 end
 local function clearFrozen() frozenTracks = {} end
 
+-- Restore the speeds frozen by freezeAnimations (Animate stays alive, so its
+-- tracks simply continue from where they were instead of restarting).
+local function unfreezeAnimations()
+    for track, saved in pairs(frozenTracks) do
+        if track and track.IsPlaying and not previewTracks[track] then
+            local sp = saved and saved.speed
+            if sp == nil then sp = 1 end
+            pcall(function() track:AdjustSpeed(sp) end)
+        end
+    end
+    frozenTracks = {}
+end
+
+local function stopPreviewTracks()
+    for track in pairs(previewTracks) do
+        pcall(function() track:Stop(0) end)
+        frozenTracks[track] = nil
+    end
+    previewTracks = {}
+end
+
 local function captureTargetAnim()
     if not ANIMATOR then return nil end
     local best = nil
@@ -133,7 +183,7 @@ local function captureTargetAnim()
         if track.IsPlaying and track.Animation and track.Animation.AnimationId then
             local s = track.Speed
             if frozenTracks[track] then s = frozenTracks[track].speed end
-            if not s or s <= 0 then s = 1 end
+            if s == nil then s = 1 end
             local tp = track.TimePosition
             if not best or tp > best.timePos then
                 best = { animId = track.Animation.AnimationId, timePos = tp, speed = s }
@@ -167,7 +217,7 @@ local function capturePlayingAnims()
         if track.IsPlaying and track.Animation and track.Animation.AnimationId then
             local speed = track.Speed
             if frozenTracks[track] then speed = frozenTracks[track].speed end
-            if not speed or speed <= 0 then speed = 1 end
+            if speed == nil then speed = 1 end
             table.insert(result, {
                 id = track.Animation.AnimationId,
                 speed = speed,
@@ -178,12 +228,12 @@ local function capturePlayingAnims()
     return result
 end
 
-local function applyAnimations(anims, noFade)
-    if not ANIMATOR then return end
+local function applyAnimationsTo(animator, anims, noFade)
+    if not animator then return end
     anims = anims or {}
     local wanted = {}
     for _, a in ipairs(anims) do wanted[a.id] = a end
-    for _, track in pairs(ANIMATOR:GetPlayingAnimationTracks()) do
+    for _, track in pairs(animator:GetPlayingAnimationTracks()) do
         if track.IsPlaying and track.Animation then
             if not wanted[track.Animation.AnimationId] then
                 track:Stop(noFade and 0 or 0.1)
@@ -192,7 +242,7 @@ local function applyAnimations(anims, noFade)
     end
     for _, a in ipairs(anims) do
         local existing = nil
-        for _, track in pairs(ANIMATOR:GetPlayingAnimationTracks()) do
+        for _, track in pairs(animator:GetPlayingAnimationTracks()) do
             if track.IsPlaying and track.Animation and track.Animation.AnimationId == a.id then
                 existing = track; break
             end
@@ -203,12 +253,72 @@ local function applyAnimations(anims, noFade)
         else
             local anim = Instance.new("Animation")
             anim.AnimationId = a.id
-            local track = ANIMATOR:LoadAnimation(anim)
+            local track = animator:LoadAnimation(anim)
             track:Play(noFade and 0 or 0.1)
             track.TimePosition = a.timePosition or 0
             track:AdjustSpeed(a.speed or 1)
         end
     end
+end
+
+local function applyAnimations(anims, noFade)
+    applyAnimationsTo(ANIMATOR, anims, noFade)
+end
+
+-- Preview used while paused in Create mode. It loads dedicated high-priority
+-- tracks instead of touching the tracks owned by the Animate script, so the
+-- live animation state is never destroyed and keeps running underneath.
+local function applyPreviewAnimations(anims)
+    if not ANIMATOR then return end
+    stopPreviewTracks()
+    anims = anims or {}
+    local seen = {}
+    for _, a in ipairs(anims) do
+        if a.id and not seen[a.id] then
+            seen[a.id] = true
+            local anim = Instance.new("Animation")
+            anim.AnimationId = a.id
+            local ok, track = pcall(function() return ANIMATOR:LoadAnimation(anim) end)
+            if ok and track then
+                pcall(function() track.Priority = Enum.AnimationPriority.Action4 end)
+                pcall(function()
+                    track:Play(0)
+                    track.TimePosition = a.timePosition or 0
+                    track:AdjustSpeed(0)
+                end)
+                previewTracks[track] = true
+            end
+        end
+    end
+end
+
+-- Align the live (Animate-owned) tracks with the anims of the frame we are
+-- about to resume from. This avoids a visible snap when the user seeked to
+-- another frame while paused and then unpaused / stepped / went idle.
+local function syncLiveTracksToAnims(anims)
+    if not ANIMATOR or type(anims) ~= "table" or #anims == 0 then return end
+    local byId = {}
+    for _, a in ipairs(anims) do
+        if a.id then byId[a.id] = a end
+    end
+    for _, track in pairs(ANIMATOR:GetPlayingAnimationTracks()) do
+        if track.IsPlaying and track.Animation and track.Animation.AnimationId then
+            local a = byId[track.Animation.AnimationId]
+            if a then
+                pcall(function()
+                    if a.timePosition ~= nil then track.TimePosition = a.timePosition end
+                    if a.speed ~= nil then track:AdjustSpeed(a.speed) end
+                end)
+            end
+        end
+    end
+end
+
+-- Leave any frozen/preview pause state and hand control back to Animate.
+local function resumeAnimations(anims)
+    stopPreviewTracks()
+    unfreezeAnimations()
+    if anims then syncLiveTracksToAnims(anims) end
 end
 
 local function captureCurrentPose()
@@ -368,7 +478,13 @@ local function applyFrame(index, freeze, alpha)
     end
     local anims = a.anims
     if freeze then
-        if anims then applyAnimations(anims, true) end
+        if state == "create" then
+            -- Keep Animate alive and show the recorded pose with dedicated
+            -- high-priority preview tracks instead of hijacking its tracks.
+            if anims then applyPreviewAnimations(anims) end
+        else
+            if anims then applyAnimations(anims, true) end
+        end
         freezeAnimations()
         lastInputFrameIndex = index
     else
@@ -409,19 +525,477 @@ local function setMovementEnabled(enabled)
     end
 end
 
+-- === LEGIT MODE ===
+-- With Legit Mode enabled, recording in Create mode happens on a local clone
+-- of the player's character. The real character is kept hidden and untouched
+-- while control is mirrored onto the clone. Playback later drives the real
+-- character with the recorded clone data.
+
+local function restoreLegitCharacter()
+    if not legit.savedParts then return end
+    for obj, saved in pairs(legit.savedParts) do
+        if obj and obj.Parent then
+            pcall(function()
+                if saved.kind == "part" then
+                    obj.LocalTransparencyModifier = saved.itm or 0
+                    obj.Transparency = saved.transparency or 0
+                    obj.CanCollide = saved.cc
+                elseif saved.kind == "decal" then
+                    obj.Transparency = saved.transparency
+                end
+            end)
+        end
+    end
+    legit.savedParts = nil
+end
+
+local function stopLegitTracks()
+    for _, track in pairs(legit.cloneTracks) do
+        pcall(function() track:Stop(0) end)
+    end
+    legit.cloneTracks = {}
+end
+
+local function nudgeSourceAnimate()
+    local h = legit.sourceHuman
+    if not h then return end
+    pcall(function() h:ChangeState(Enum.HumanoidStateType.Physics) end)
+    task.delay(0.05, function()
+        if legit.active and legit.sourceHuman == h then
+            pcall(function() h:ChangeState(Enum.HumanoidStateType.Running) end)
+        end
+    end)
+end
+
+local function enterLegitClone()
+    if legit.active then return true end
+    local src = CHARACTER
+    if not src or not src.Parent or not ROOT or not HUMAN then return false end
+
+    local wasArchivable = src.Archivable
+    local archived = {}
+    for _, d in ipairs(src:GetDescendants()) do
+        archived[d] = d.Archivable
+        d.Archivable = true
+    end
+    src.Archivable = true
+    local clone = src:Clone()
+    src.Archivable = wasArchivable
+    for d, a in pairs(archived) do
+        if d then d.Archivable = a end
+    end
+    if not clone then return false end
+
+    local cRoot = clone:FindFirstChild("HumanoidRootPart")
+    local cHuman = clone:FindFirstChildOfClass("Humanoid")
+    if not cRoot or not cHuman then
+        clone:Destroy()
+        return false
+    end
+
+    clone.Name = src.Name
+    local cAnimator = cHuman:FindFirstChildOfClass("Animator")
+    if not cAnimator then
+        cAnimator = Instance.new("Animator")
+        cAnimator.Parent = cHuman
+    end
+
+    pcall(function()
+        cHuman.MaxHealth = 9e9
+        cHuman.Health = 9e9
+    end)
+    cHuman.BreakJointsOnDeath = false
+    cHuman.WalkSpeed = originalWalkSpeed
+    cHuman.JumpPower = originalJumpPower
+    cHuman.AutoRotate = true
+
+    for _, d in ipairs(clone:GetDescendants()) do
+        if d:IsA("BasePart") then d.Anchored = false end
+    end
+    cRoot.Anchored = true
+
+    clone.Parent = workspace
+    pcall(function() clone:PivotTo(src:GetPivot()) end)
+
+    -- Hide the real character locally while the clone is in use
+    legit.savedParts = {}
+    for _, d in ipairs(src:GetDescendants()) do
+        if d:IsA("BasePart") then
+            legit.savedParts[d] = {
+                kind = "part",
+                itm = d.LocalTransparencyModifier,
+                transparency = d.Transparency,
+                cc = d.CanCollide,
+            }
+            d.LocalTransparencyModifier = 1
+            d.Transparency = 1
+            d.CanCollide = false
+        elseif d:IsA("Decal") or d:IsA("Texture") then
+            legit.savedParts[d] = { kind = "decal", transparency = d.Transparency }
+            d.Transparency = 1
+        end
+    end
+
+    legit.active = true
+    legit.clone = clone
+    legit.cloneRoot = cRoot
+    legit.cloneHuman = cHuman
+    legit.cloneAnimator = cAnimator
+    legit.cloneTracks = {}
+    legit.sourceChar = src
+    legit.sourceRoot = ROOT
+    legit.sourceHuman = HUMAN
+    legit.sourceAnimator = ANIMATOR
+    legit.sourceAnimate = ANIMATE_SCRIPT
+    legit.lastJump = false
+
+    local cam = currentCamera()
+    legit.savedCameraSubject = cam and cam.CameraSubject or HUMAN
+
+    local cAnimate = clone:FindFirstChild("Animate")
+    -- Keep the clone's Animate stopped until it becomes the local character;
+    -- enabling it later guarantees a fresh start in a valid container.
+    if cAnimate then cAnimate.Disabled = true end
+
+    -- Keep the real character available as an input/animation source
+    if legit.sourceHuman then
+        legit.sourceHuman.Sit = false
+        legit.sourceHuman.AutoRotate = false
+        legit.sourceHuman.WalkSpeed = originalWalkSpeed
+        legit.sourceHuman.JumpPower = originalJumpPower
+        pcall(function() legit.sourceHuman:ChangeState(Enum.HumanoidStateType.Running) end)
+    end
+    if legit.sourceRoot then legit.sourceRoot.Anchored = true end
+
+    ROOT = cRoot
+    HUMAN = cHuman
+    ANIMATOR = cAnimator
+    ANIMATE_SCRIPT = cAnimate
+
+    if cam then cam.CameraSubject = cHuman end
+
+    -- Become the clone so its own Animate/character scripts run natively.
+    legit.swapped = false
+    legit.nativeAnim = false
+    legit.mirrorControls = false
+    legit.noMoveFrames = 0
+    legit.animateIds = nil
+    legit.nativeMissFrames = 0
+    if PLAYER.Character == src then
+        legit.ignoreChars[clone] = true
+        local ok = pcall(function() PLAYER.Character = clone end)
+        if ok and PLAYER.Character == clone then
+            legit.swapped = true
+        end
+    end
+
+    if legit.swapped then
+        -- Start the clone's own Animate now that it is the local character.
+        if cAnimate then cAnimate.Disabled = false end
+    else
+        -- If the swap failed, mirror the source character's animations instead.
+        if legit.sourceAnimate then legit.sourceAnimate.Disabled = false end
+        nudgeSourceAnimate()
+    end
+
+    print("[NexusTAS] Legit clone created (record on clone, real character hidden).")
+    return true
+end
+
+local function exitLegitClone()
+    if not legit.active then return end
+
+    stopLegitTracks()
+
+    local sourceRoot = legit.sourceRoot
+    local sourceHuman = legit.sourceHuman
+    local sourceAnimator = legit.sourceAnimator
+    local sourceAnimate = legit.sourceAnimate
+    local sourceChar = legit.sourceChar
+    local clone = legit.clone
+    local savedSubject = legit.savedCameraSubject
+
+    -- Hand the character back to the real player before destroying the clone
+    if legit.swapped and clone and sourceChar and sourceChar.Parent
+        and PLAYER.Character == clone then
+        legit.ignoreChars[sourceChar] = true
+        pcall(function() PLAYER.Character = sourceChar end)
+        task.delay(1, function()
+            if legit.ignoreChars then legit.ignoreChars[sourceChar] = nil end
+        end)
+    end
+    legit.swapped = false
+    legit.active = false
+    legit.nativeAnim = false
+    legit.mirrorControls = false
+    legit.noMoveFrames = 0
+    legit.animateIds = nil
+    legit.nativeMissFrames = 0
+
+    restoreLegitCharacter()
+
+    if sourceHuman then
+        pcall(function()
+            sourceHuman.AutoRotate = originalAutoRotate
+            sourceHuman.WalkSpeed = originalWalkSpeed
+            sourceHuman.JumpPower = originalJumpPower
+        end)
+    end
+
+    local cam = currentCamera()
+    if cam then
+        pcall(function() cam.CameraSubject = sourceHuman or savedSubject end)
+    end
+
+    if legit.clone then
+        pcall(function() legit.clone:Destroy() end)
+    end
+
+    ROOT = sourceRoot
+    HUMAN = sourceHuman
+    ANIMATOR = sourceAnimator
+    ANIMATE_SCRIPT = sourceAnimate
+
+    legit.clone = nil
+    legit.cloneRoot = nil
+    legit.cloneHuman = nil
+    legit.cloneAnimator = nil
+    legit.sourceChar = nil
+    legit.sourceRoot = nil
+    legit.sourceHuman = nil
+    legit.sourceAnimator = nil
+    legit.sourceAnimate = nil
+    legit.savedCameraSubject = nil
+    legit.lastJump = false
+
+    clearFrozen()
+    print("[NexusTAS] Legit clone removed (real character restored).")
+end
+
+local function mirrorSourceAnimations()
+    if not legit.active or not legit.cloneAnimator then return false end
+    local anims = {}
+    if legit.sourceAnimator then
+        for _, track in pairs(legit.sourceAnimator:GetPlayingAnimationTracks()) do
+            if track.IsPlaying and track.Animation and track.Animation.AnimationId then
+                local speed = track.Speed
+                if speed and speed > 0 then
+                    table.insert(anims, {
+                        id = track.Animation.AnimationId,
+                        speed = speed,
+                        timePosition = track.TimePosition,
+                    })
+                end
+            end
+        end
+    end
+    if #anims == 0 then return false end
+    applyAnimationsTo(legit.cloneAnimator, anims, false)
+    return true
+end
+
+-- Collect the animation assets baked into the character's Animate script
+-- (idle/walk/run/jump/fall/...) so they can be driven manually if the
+-- clone's own Animate script refuses to start.
+local function collectAnimateIds()
+    local ids = {}
+    if not ANIMATE_SCRIPT then return ids end
+    for _, child in ipairs(ANIMATE_SCRIPT:GetDescendants()) do
+        if child:IsA("Animation") and child.AnimationId ~= "" then
+            ids[string.lower(child.Name)] = child.AnimationId
+        end
+    end
+    return ids
+end
+
+local function playCloneAnim(id, speed)
+    local animator = legit.cloneAnimator
+    if not animator or not id then return end
+    local playing = {}
+    local existing = nil
+    for _, track in pairs(animator:GetPlayingAnimationTracks()) do
+        if track.IsPlaying then
+            if track.Animation and track.Animation.AnimationId == id then
+                existing = track
+            else
+                table.insert(playing, track)
+            end
+        end
+    end
+    if existing then
+        if speed and existing.Speed ~= speed then
+            pcall(function() existing:AdjustSpeed(speed) end)
+        end
+        return
+    end
+    for _, track in ipairs(playing) do
+        pcall(function() track:Stop(0.1) end)
+    end
+    local anim = Instance.new("Animation")
+    anim.AnimationId = id
+    local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
+    if ok and track then
+        pcall(function()
+            track:Play(0.1)
+            track:AdjustSpeed(speed or 1)
+        end)
+    end
+end
+
+-- Manual state-driven animation used when neither the clone's Animate script
+-- nor the real character's tracks are available.
+local function fallbackCloneAnim()
+    if not legit.active or not legit.cloneAnimator or not legit.cloneHuman then
+        return false
+    end
+    if not legit.animateIds or not next(legit.animateIds) then
+        legit.animateIds = collectAnimateIds()
+    end
+    local ids = legit.animateIds
+    if not next(ids) then return false end
+
+    local h = legit.cloneHuman
+    local st = h:GetState()
+    local moving = h.MoveDirection.Magnitude > 0.1
+    local chosen
+    if st == Enum.HumanoidStateType.Jumping or st == Enum.HumanoidStateType.Freefall then
+        chosen = ids.fall or ids.jump
+    elseif st == Enum.HumanoidStateType.Swimming then
+        chosen = ids.swim or ids.swimidle
+    elseif st == Enum.HumanoidStateType.Climbing then
+        chosen = ids.climb
+    elseif moving then
+        if h.WalkSpeed > 10 or not ids.walk then
+            chosen = ids.run or ids.walk
+        else
+            chosen = ids.walk or ids.run
+        end
+    else
+        chosen = ids.idle
+    end
+    if not chosen then chosen = ids.idle end
+    if not chosen then return false end
+
+    local speed = 1
+    if moving and chosen == ids.walk then
+        speed = math.clamp(h.WalkSpeed / 16, 0.3, 2)
+    end
+    playCloneAnim(chosen, speed)
+    return true
+end
+
+local function updateLegit()
+    if not legit.active then return end
+    local cam = currentCamera()
+    if cam and legit.cloneHuman and cam.CameraSubject ~= legit.cloneHuman then
+        cam.CameraSubject = legit.cloneHuman
+    end
+
+    local activeRecording = state == "create" and not isPaused
+        and (isRecording or manualTick)
+    if not activeRecording then
+        if legit.cloneHuman then
+            pcall(function() legit.cloneHuman:Move(Vector3.zero, false) end)
+        end
+        return
+    end
+
+    local srcHuman = legit.sourceHuman
+    if srcHuman and legit.cloneHuman then
+        if not legit.swapped then
+            pcall(function() legit.cloneHuman:Move(srcHuman.MoveDirection, false) end)
+        else
+            -- The clone may be driven natively by the PlayerModule. Only take
+            -- over if the real character keeps moving while the clone stands
+            -- still for several frames (custom controls that ignore the swap).
+            local srcDir = srcHuman.MoveDirection
+            local cloneDir = legit.cloneHuman.MoveDirection
+            if srcDir.Magnitude > 0.1 and cloneDir.Magnitude < 0.05 then
+                legit.noMoveFrames = (legit.noMoveFrames or 0) + 1
+                if legit.noMoveFrames >= 10 then
+                    legit.mirrorControls = true
+                end
+            elseif cloneDir.Magnitude > 0.05 then
+                legit.noMoveFrames = 0
+            end
+            if legit.mirrorControls and srcDir.Magnitude > 0.01 then
+                pcall(function() legit.cloneHuman:Move(srcDir, false) end)
+            end
+        end
+        local jump = srcHuman.Jump
+        if jump and not legit.lastJump then
+            pcall(function() legit.cloneHuman.Jump = true end)
+        end
+        legit.lastJump = jump
+        if (not legit.swapped or legit.mirrorControls)
+            and legit.cloneHuman.WalkSpeed ~= srcHuman.WalkSpeed then
+            legit.cloneHuman.WalkSpeed = srcHuman.WalkSpeed
+        end
+    end
+
+    if legit.nativeAnim then
+        -- Keep an eye on the native Animate script: if it silently stops
+        -- producing tracks, switch to the manual driver instead of freezing.
+        local anyTrack = false
+        if legit.cloneAnimator then
+            for _, track in pairs(legit.cloneAnimator:GetPlayingAnimationTracks()) do
+                if track.IsPlaying and track.Animation then
+                    anyTrack = true
+                    break
+                end
+            end
+        end
+        if anyTrack then
+            legit.nativeMissFrames = 0
+        else
+            legit.nativeMissFrames = (legit.nativeMissFrames or 0) + 1
+            if legit.nativeMissFrames > 30 then
+                legit.nativeAnim = false
+                legit.nativeMissFrames = 0
+                -- Stop the native script so it cannot fight the manual driver
+                setAnimateEnabled(false)
+            end
+        end
+    else
+        if not mirrorSourceAnimations() then
+            fallbackCloneAnim()
+        end
+    end
+end
+
+local function setLegitMode(enabled)
+    legitMode = enabled and true or false
+    if not legitMode and legit.active and state == "create"
+        and not isRecording and not transitioning then
+        exitLegitClone()
+        if playIndex >= 1 and recordedData[playIndex] then
+            applyFrame(playIndex, true)
+            frozenFrame = recordedData[playIndex]
+        elseif ROOT then
+            frozenFrame = captureCurrentPose()
+        end
+        freezeAnimations()
+        setAnchored(true)
+        setMovementEnabled(false)
+        setAutoRotate(false)
+    end
+end
+
 -- === MODES ===
 local function goIdle()
     if state == "idle" then return end
+    exitLegitClone()
     releaseAllReplayInputs()
-    clearFrozen()
+    resumeAnimations(frozenFrame and frozenFrame.anims)
     setAnimateEnabled(true)
-    pendingAnimSync = nil
     if HUMAN then
         HUMAN.Sit = false
         HUMAN.AutoRotate = originalAutoRotate
         HUMAN.WalkSpeed = originalWalkSpeed
         HUMAN.JumpPower = originalJumpPower
-        pcall(function() HUMAN:ChangeState(Enum.HumanoidStateType.Running) end)
+        -- Do NOT force a Humanoid state here. Forcing Running restarted the
+        -- Animate state machine (e.g. reset the animation after pausing on a
+        -- truss). The natural state machine recovers on its own once released.
     end
     if ROOT then
         zeroVelocity(); setAnchored(false); zeroVelocity()
@@ -433,9 +1007,14 @@ end
 
 local function enterCreate()
     if state == "create" then return end
+    exitLegitClone()
     state="create"; isRecording=false; isPaused=true
     isSeeking=false; seekDirection=0; seekAccumulator=0
-    setAnimateEnabled(false); setAutoRotate(false); setMovementEnabled(false); zeroVelocity()
+    -- Animate stays enabled in Create mode: turning it off destroyed its
+    -- tracks and caused the animation glitches on pause/unpause.
+    stopPreviewTracks()
+    unfreezeAnimations()
+    setAnimateEnabled(true); setAutoRotate(false); setMovementEnabled(false); zeroVelocity()
     if #recordedData > 0 then
         local startIndex = #recordedData
         applyFrame(startIndex, true)
@@ -458,20 +1037,32 @@ local function toggleRecording()
         end
         pendingInputs = {}
         isRecording=false; isPaused=true
-        setMovementEnabled(false); setAutoRotate(false); setAnimateEnabled(false)
-        releaseAllReplayInputs()
+        -- Capture the pose while the animation tracks are still alive.
         frozenFrame = captureCurrentPose()
+        -- Keep Animate enabled: only freeze the tracks (speed = 0). Nothing is
+        -- destroyed, so unpausing can simply unfreeze the same tracks.
         freezeAnimations()
+        setMovementEnabled(false); setAutoRotate(false)
+        releaseAllReplayInputs()
         setAnchored(true)
+        -- If Legit Mode was turned off mid-session, move back to the real char
+        if legit.active and not legitMode then
+            exitLegitClone()
+            if playIndex >= 1 and recordedData[playIndex] then
+                applyFrame(playIndex, true)
+                frozenFrame = recordedData[playIndex]
+            end
+            freezeAnimations()
+            setAnchored(true)
+            setMovementEnabled(false); setAutoRotate(false)
+        end
         return
     end
 
-    -- === СНАЧАЛА сохраняем точную позу, в которой игрок стоял на паузе ===
-    -- Берём анимации из frozenFrame (снимок паузы) или из последнего кадра
-    local resumeSource = frozenFrame or (playIndex > 0 and recordedData[playIndex])
-    local capturedAnims = (resumeSource and resumeSource.anims) or {}
-
-    clearFrozen()
+    -- === RESUME ===
+    -- Stop pause preview tracks and let the still-alive Animate tracks continue
+    -- from exactly where they were frozen. No re-creation / re-sync is needed.
+    resumeAnimations()
     pendingInputs = {}
     if playIndex < #recordedData then
         for i = #recordedData, playIndex + 1, -1 do table.remove(recordedData, i) end
@@ -479,10 +1070,22 @@ local function toggleRecording()
     if playIndex > 0 and recordedData[playIndex] then
         recordingClock = recordedData[playIndex].t
     else recordingClock = 0 end
+
+    -- Legit Mode: record with a local clone instead of the real character
+    if legitMode and state == "create" and not legit.active then
+        enterLegitClone()
+    end
+
+    if HUMAN then
+        HUMAN.Sit = false
+        HUMAN.WalkSpeed = originalWalkSpeed
+        HUMAN.JumpPower = originalJumpPower
+        HUMAN.AutoRotate = originalAutoRotate
+        HUMAN:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+    end
+
     local currentCF = ROOT.CFrame
     local anims = capturePlayingAnims()
-    -- если живых анимаций нет — берём захваченные, чтобы не потерять позу
-    if #anims == 0 and #capturedAnims > 0 then anims = capturedAnims end
     local vNow = ROOT.AssemblyLinearVelocity
     local rvNow = ROOT.AssemblyAngularVelocity
     local stNow = HUMAN and HUMAN:GetState() or Enum.HumanoidStateType.Freefall
@@ -494,55 +1097,59 @@ local function toggleRecording()
     playIndex = #recordedData
     frozenFrame = nil
     transitioning = true
-    if HUMAN then
-        HUMAN.Sit = false
-        HUMAN.JumpPower = originalJumpPower
-        HUMAN.AutoRotate = originalAutoRotate
-        HUMAN:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
-    end
 
-    -- === ШАГ 1: выставить точную позу, пока Animate ещё выключен ===
-    -- noFade=true, чтобы анимации встали мгновенно в сохранённый TimePosition
-    if #capturedAnims > 0 then
-        applyAnimations(capturedAnims, true)
-        freezeAnimations()
-    end
-
-    -- === ШАГ 2: снять якорь и восстановить физику ===
+    -- Release physics and restore the recorded state. Animate is already alive,
+    -- so the animation state stays continuous across the pause boundary.
     setAnchored(false)
     local lastFrame = recordedData[playIndex]
     applyVelocityFromFrame(lastFrame, 0, nil)
-    if HUMAN and lastFrame.humState then
+    if HUMAN and lastFrame.humState and HUMAN:GetState() ~= lastFrame.humState then
+        -- Only change when actually needed: re-asserting the same state made
+        -- Animate restart its state transition (visible animation reset).
         pcall(function() HUMAN:ChangeState(lastFrame.humState) end)
     end
 
-    -- === ШАГ 3: дать физике проглотить позу один кадр ===
     RunService.Heartbeat:Wait()
 
-    -- === ШАГ 4: теперь можно включать Animate. Он заново стартует свои треки с 0,
-    -- но мы их тут же синхронизируем через pendingAnimSync (см. Heartbeat) ===
-    setAnimateEnabled(true)
-    if HUMAN then HUMAN.WalkSpeed = originalWalkSpeed end
-
-    -- Собираем цели синхронизации для ВСЕХ захваченных анимаций, а не для одной
-    if #capturedAnims > 0 then
-        local targets = {}
-        for _, a in ipairs(capturedAnims) do
-            if a.id then
-                targets[a.id] = {
-                    timePosition = a.timePosition or 0,
-                    speed = a.speed,
-                    synced = false,
-                }
-            end
-        end
-        if next(targets) then
-            pendingAnimSync = { targets = targets, frames = 120 }
-        end
-    end
-
+    setAnimateEnabled((not legit.active) or legit.swapped)
     RunService.RenderStepped:Wait()
     if HUMAN then HUMAN:SetStateEnabled(Enum.HumanoidStateType.Jumping, true) end
+    if legit.active then
+        if legit.swapped then
+            -- The clone is the local character now: its own Animate runs natively.
+            legit.nativeAnim = true
+            -- Verify a bit later. Animate needs a few frames to load its tracks;
+            -- checking too early produced a false "no animation" result before.
+            task.delay(0.75, function()
+                if not legit.active or not legit.swapped then return end
+                local hasTracks = false
+                if legit.cloneAnimator then
+                    for _, track in pairs(legit.cloneAnimator:GetPlayingAnimationTracks()) do
+                        if track.IsPlaying and track.Animation then
+                            hasTracks = true
+                            break
+                        end
+                    end
+                end
+                if hasTracks then
+                    legit.nativeAnim = true
+                else
+                    -- Native Animate never started: drive the clone ourselves.
+                    legit.nativeAnim = false
+                    setAnimateEnabled(false)
+                    fallbackCloneAnim()
+                end
+            end)
+        else
+            legit.nativeAnim = false
+            if legit.sourceAnimate then legit.sourceAnimate.Disabled = false end
+            nudgeSourceAnimate()
+            if not mirrorSourceAnimations() then
+                fallbackCloneAnim()
+            end
+        end
+        resumeAnimations()
+    end
     isRecording = true; isPaused = false; transitioning = false
 end
 
@@ -591,126 +1198,14 @@ end
 
 
 
--- Умная починка: применяется только к состояниям, где есть явная
--- единственная доминирующая анимация (>= 85%), и продвигает timePosition
--- только если персонаж реально двигался в этом кадре.
-local function repairRecordedAnimations()
-    if type(recordedData) ~= "table" then return 0 end
-    if #recordedData < 3 then return 0 end
-
-    -- Шаг 1. Статистика: stateName -> { counts = {animId -> n}, total = n }
-    local stats = {}
-    for _, frame in ipairs(recordedData) do
-        if type(frame) == "table" then
-            local st = frame.humState
-            local anims = frame.anims
-            if st and st.Name and type(anims) == "table" then
-                local name = st.Name
-                local entry = stats[name]
-                if not entry then
-                    entry = { counts = {}, total = 0 }
-                    stats[name] = entry
-                end
-                for _, anim in ipairs(anims) do
-                    if type(anim) == "table" and anim.id ~= nil then
-                        entry.counts[anim.id] = (entry.counts[anim.id] or 0) + 1
-                        entry.total = entry.total + 1
-                    end
-                end
-            end
-        end
-    end
-
-    -- Шаг 2. Эталон для каждого состояния (только при доминантности >= 85%)
-    local reference = {}
-    for name, s in pairs(stats) do
-        local total = tonumber(s and s.total) or 0
-        if total > 0 then
-            local bestId, bestCount = nil, 0
-            for id, c in pairs(s.counts or {}) do
-                local cn = tonumber(c) or 0
-                if cn > bestCount then bestId, bestCount = id, cn end
-            end
-            if bestId ~= nil and bestCount > 0 and (bestCount / total) >= 0.85 then
-                reference[name] = bestId
-            end
-        end
-    end
-
-    local MOVE_EPS = 0.5  -- studs/sec
-
-    -- Шаг 3. Починка
-    local repaired = 0
-    for i, frame in ipairs(recordedData) do
-        if type(frame) == "table" then
-            local st = frame.humState
-            if st and st.Name then
-                local name = st.Name
-                local refId = reference[name]
-                if refId ~= nil then
-                    local hasRef = false
-                    if type(frame.anims) == "table" then
-                        for _, anim in ipairs(frame.anims) do
-                            if type(anim) == "table" and anim.id == refId then
-                                hasRef = true; break
-                            end
-                        end
-                    end
-                    if not hasRef then
-                        local refTimePos, refSpeed = 0, 1
-                        local found = false
-                        for j = i - 1, math.max(1, i - 60), -1 do
-                            local f = recordedData[j]
-                            if type(f) == "table" and f.humState
-                                and f.humState.Name == name
-                                and type(f.anims) == "table" then
-                                for _, anim in ipairs(f.anims) do
-                                    if type(anim) == "table" and anim.id == refId then
-                                        refTimePos = tonumber(anim.timePosition) or 0
-                                        refSpeed = tonumber(anim.speed) or 1
-                                        found = true
-                                        break
-                                    end
-                                end
-                                if found then
-                                    local vel = frame.velocity
-                                    local speed = 0
-                                    if typeof(vel) == "Vector3" then
-                                        speed = vel.Magnitude
-                                    end
-                                    if speed > MOVE_EPS then
-                                        refTimePos = refTimePos + RECORD_INTERVAL * (i - j)
-                                    end
-                                    break
-                                end
-                            end
-                        end
-                        frame.anims = {
-                            { id = refId, timePosition = refTimePos, speed = refSpeed }
-                        }
-                        repaired = repaired + 1
-                    end
-                end
-            end
-        end
-    end
-
-    return repaired
-end
-
 local function enterTest()
     if state == "test" then goIdle() return end
     if #recordedData == 0 then return end
+    exitLegitClone()
+    stopPreviewTracks()
+    unfreezeAnimations()
 
-    -- Чиним анимации перед воспроизведением
-    local fixed = repairRecordedAnimations()
-    if fixed > 0 then
-        print(("[NexusTAS] Repaired %d frames before Test"):format(fixed))
-    end
-
-    clearFrozen()
     setAnimateEnabled(false); setAutoRotate(false)
-    pendingAnimSync = nil
     state = "test"; isRecording=false; isPaused=false; isSeeking=false
     playIndex = 1
     playStartTime = tick() - (recordedData[1].t or 0)
@@ -736,15 +1231,11 @@ end
 local function enterEdittest()
     if state == "edittest" then goIdle() return end
     if #recordedData == 0 then return end
+    exitLegitClone()
+    stopPreviewTracks()
+    unfreezeAnimations()
 
-    -- Чиним анимации перед воспроизведением
-    local fixed = repairRecordedAnimations()
-    if fixed > 0 then
-        print(("[NexusTAS] Repaired %d frames before Edittest"):format(fixed))
-    end
-
-    clearFrozen(); setAnimateEnabled(false); setAutoRotate(false)
-    pendingAnimSync = nil
+    setAnimateEnabled(false); setAutoRotate(false)
     state="edittest"; isRecording=false; isPaused=true; isSeeking=false
     seekDirection=0; seekAccumulator=0; lastInputFrameIndex=0
     playIndex = 1
@@ -759,7 +1250,6 @@ local function toggleEdittestPlayback()
     if isPaused then
         transitioning = true
         clearFrozen()
-        pendingAnimSync = nil
         if HUMAN then HUMAN:SetStateEnabled(Enum.HumanoidStateType.Jumping, false) end
         setAnimateEnabled(false); setAutoRotate(false); setMovementEnabled(false)
         if playIndex >= #recordedData then playIndex = 1 end
@@ -814,21 +1304,28 @@ local function updateEdittest()
     if idx then applyFrame(idx, false, alpha) end
 end
 
--- === SINGLE PHYSICS TICK ===
+-- === SINGLE PHYSICS TICK (go forward / "unpause" exactly 1 frame) ===
+local STEP_BIND = "NexusTAS_SingleTick"
+
 local function stepOnePhysicsTick()
     if state ~= "create" then return end
     if not isPaused or isRecording or manualTick then return end
+    if not ROOT then return end
     task.spawn(function()
         while transitioning do RunService.Heartbeat:Wait() end
         transitioning = true
         manualTick = true
-        clearFrozen()
-        pendingInputs = {}
+
+        -- Trim anything after the current frame; remember the clock.
         if playIndex < #recordedData then
             for i = #recordedData, playIndex + 1, -1 do table.remove(recordedData, i) end
         end
-        if playIndex > 0 and recordedData[playIndex] then recordingClock = recordedData[playIndex].t
-        else recordingClock = 0 end
+        if playIndex > 0 and recordedData[playIndex] then
+            recordingClock = recordedData[playIndex].t
+        else
+            recordingClock = 0
+        end
+
         if #recordedData == 0 then
             local camCF, camFOV = captureCamera()
             table.insert(recordedData, {
@@ -841,44 +1338,74 @@ local function stepOnePhysicsTick()
             })
             playIndex = #recordedData
         end
-        local lastFrame = recordedData[playIndex]
-        if not lastFrame then manualTick=false; transitioning=false; return end
-        local lv  = lastFrame.velocity    or Vector3.zero
-        local lrv = lastFrame.rotVelocity or Vector3.zero
-        if HUMAN then
-            HUMAN.Sit = false; HUMAN.AutoRotate = false
-            HUMAN.WalkSpeed = originalWalkSpeed; HUMAN.JumpPower = originalJumpPower
+        if not recordedData[playIndex] then
+            manualTick = false; transitioning = false
+            return
         end
-        setAnimateEnabled(true)
-        isPaused = false; isRecording = false
-        setAnchored(false)
-        if HUMAN and lastFrame.humState then
-            pcall(function() HUMAN:ChangeState(lastFrame.humState) end)
-        end
-        RunService.PreSimulation:Wait()
-        ROOT.AssemblyLinearVelocity  = lv
-        ROOT.AssemblyAngularVelocity = lrv
-        local dt = RunService.PostSimulation:Wait()
-        local cf = ROOT.CFrame
-        local v  = ROOT.AssemblyLinearVelocity
-        local rv = ROOT.AssemblyAngularVelocity
-        local st = HUMAN and HUMAN:GetState() or Enum.HumanoidStateType.Freefall
-        local anims = capturePlayingAnims()
-        local camCF, camFOV = captureCamera()
-        isPaused = true
-        setAnchored(true)
-        recordingClock = recordingClock + dt
-        table.insert(recordedData, {
-            cf=cf, cameraCFrame=camCF, cameraFOV=camFOV, anims=anims,
-            t=recordingClock, velocity=v, rotVelocity=rv, humState=st, inputs=pendingInputs,
-        })
-        playIndex = #recordedData
+
         pendingInputs = {}
-        setMovementEnabled(false); setAutoRotate(false); setAnimateEnabled(false)
-        frozenFrame = recordedData[playIndex]
-        freezeAnimations()
-        manualTick = false
-        transitioning = false
+        stopSeek()
+
+        -- Release exactly like second.lua's releaseCharacter(): previews off,
+        -- live tracks unfrozen, physics live. NO forced velocity and NO forced
+        -- Humanoid state - that is what produced the fake "eternal flight".
+        local frameNow = recordedData[playIndex]
+        resumeAnimations(frameNow and frameNow.anims)
+        if HUMAN then
+            HUMAN.Sit = false
+            HUMAN.AutoRotate = true
+            HUMAN.WalkSpeed = originalWalkSpeed
+            HUMAN.JumpPower = originalJumpPower
+            -- A pause/resume transition may have left Jumping disabled for a
+            -- frame; restore it so this tick is real physics, not a frozen rig.
+            pcall(function()
+                HUMAN:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+            end)
+        end
+        isPaused = false
+        if ROOT.Anchored then ROOT.Anchored = false end
+
+        -- Second.lua captureSingleFrame(): wait one full Heartbeat, then capture
+        -- once at the camera render step and freeze immediately.
+        local startedAt = tick()
+        RunService.Heartbeat:Wait()
+
+        RunService:BindToRenderStep(STEP_BIND, Enum.RenderPriority.Camera.Value + 1, function()
+            RunService:UnbindFromRenderStep(STEP_BIND)
+
+            if not ROOT then
+                manualTick = false; transitioning = false; isPaused = true
+                return
+            end
+
+            local cf = ROOT.CFrame
+            local v = ROOT.AssemblyLinearVelocity
+            local rv = ROOT.AssemblyAngularVelocity
+            local st = HUMAN and HUMAN:GetState() or Enum.HumanoidStateType.Freefall
+            local anims = capturePlayingAnims()
+            local camCF, camFOV = captureCamera()
+
+            -- Freeze immediately so the stored frame is the exact visible pose.
+            setAnchored(true)
+            if HUMAN then HUMAN.AutoRotate = false end
+            freezeAnimations()
+
+            local dt = math.max(tick() - startedAt, 1 / 240)
+            recordingClock = recordingClock + dt
+            table.insert(recordedData, {
+                cf=cf, cameraCFrame=camCF, cameraFOV=camFOV, anims=anims,
+                t=recordingClock, velocity=v, rotVelocity=rv, humState=st,
+                inputs=pendingInputs,
+            })
+            playIndex = #recordedData
+            pendingInputs = {}
+            isPaused = true
+            setMovementEnabled(false); setAutoRotate(false)
+            frozenFrame = recordedData[playIndex]
+            freezeAnimations()
+            manualTick = false
+            transitioning = false
+        end)
     end)
 end
 
@@ -938,7 +1465,7 @@ end
 local function clearRecording()
     if state ~= "idle" then goIdle() end
     recordedData = {}; playIndex = 0; recordingClock = 0
-    frozenFrame = nil; pendingAnimSync = nil; pendingInputs = {}
+    frozenFrame = nil; pendingInputs = {}
     lastInputFrameIndex = 0; clearFrozen()
 end
 
@@ -1019,14 +1546,8 @@ local function importRecording(str)
     recordedData = newData
     playIndex = 0
     recordingClock = recordedData[#recordedData].t or 0
-    frozenFrame = nil; pendingAnimSync = nil; pendingInputs = {}
+    frozenFrame = nil; pendingInputs = {}
     lastInputFrameIndex = 0; clearFrozen()
-
-    -- Чиним анимации после импорта
-    local fixed = repairRecordedAnimations()
-    if fixed > 0 then
-        print(("[NexusTAS] Repaired %d frames on import"):format(fixed))
-    end
 
     return true
 end
@@ -1135,39 +1656,21 @@ UserInputService.InputChanged:Connect(function(input, processed)
     pushRecordedInput(input, "changed")
 end)
 
+UserInputService.JumpRequest:Connect(function()
+    if not legit.active or not legit.cloneHuman then return end
+    if state ~= "create" or isPaused then return end
+    if not isRecording and not manualTick then return end
+    pcall(function() legit.cloneHuman.Jump = true end)
+end)
+
 -- === MAIN LOOP ===
 RunService.Heartbeat:Connect(function(dt)
-    if pendingAnimSync and ANIMATOR then
-        local targets = pendingAnimSync.targets
-        if targets then
-            -- Пытаемся поймать ВСЕ ожидаемые треки, которые Animate только что запустил
-            for _, track in pairs(ANIMATOR:GetPlayingAnimationTracks()) do
-                if track.IsPlaying and track.Animation and track.Animation.AnimationId then
-                    local target = targets[track.Animation.AnimationId]
-                    if target and not target.synced then
-                        track.TimePosition = target.timePosition
-                        if target.speed then track:AdjustSpeed(target.speed) end
-                        target.synced = true
-                    end
-                end
-            end
-            -- Снимаем синхронизацию только когда ВСЕ анимации пойманы
-            local allSynced = true
-            for _, t in pairs(targets) do
-                if not t.synced then allSynced = false; break end
-            end
-            if allSynced then
-                pendingAnimSync = nil
-            else
-                pendingAnimSync.frames = pendingAnimSync.frames - 1
-                if pendingAnimSync.frames <= 0 then pendingAnimSync = nil end
-            end
-        else
-            pendingAnimSync = nil
-        end
-    end
+    -- During a manual single tick we still need updateLegit() to run so the
+    -- recorded frame contains real input/physics, but the pause anchor logic
+    -- must stay disabled.
+    if transitioning and not manualTick then return end
 
-    if transitioning then return end
+    updateLegit()
 
     if isRecording and not manualTick then
         recordingClock = recordingClock + dt
@@ -1214,7 +1717,9 @@ end)
 
 -- === RESPAWN ===
 PLAYER.CharacterAdded:Connect(function(newChar)
-    clearFrozen(); pendingAnimSync = nil
+    if legit.ignoreChars[newChar] then return end
+    if legit.active then exitLegitClone() end
+    clearFrozen()
     transitioning=false; stepRequested=false; manualTick=false
     pendingInputs={}; lastInputFrameIndex=0; activeReplayInputs={}
     CHARACTER = newChar
@@ -1226,6 +1731,7 @@ PLAYER.CharacterAdded:Connect(function(newChar)
     originalJumpPower = HUMAN.JumpPower
     originalAutoRotate = HUMAN.AutoRotate
     CAMERA = workspace.CurrentCamera
+    if CAMERA then CAMERA.CameraSubject = HUMAN end
     state="idle"; isRecording=false; isPaused=false; isSeeking=false
     recordingClock=0; frozenFrame=nil
     setAnchored(false)
@@ -1435,7 +1941,7 @@ do
     subtitle.Position = UDim2.new(0, 148, 0, 0)
     subtitle.Size = UDim2.new(0, 200, 1, 0)
     subtitle.Font = Enum.Font.Gotham
-    subtitle.Text = "BETA V 1.0.1"
+    subtitle.Text = "BETA V 1.8"
     subtitle.TextSize = 12
     subtitle.TextColor3 = C.subtext
     subtitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -1944,10 +2450,13 @@ do
         makeToggle(120, "Smooth Animations", true, function(v)
             _G.__NexusSmooth = v
         end)
+        makeToggle(170, "Legit Mode (clone recording)", legitMode, function(v)
+            setLegitMode(v)
+        end)
 
-        makeSectionTitle(settingsPage, "QUICK ACTIONS", 178)
+        makeSectionTitle(settingsPage, "QUICK ACTIONS", 228)
 
-        local rowA = makeRow(settingsPage, 198, 42)
+        local rowA = makeRow(settingsPage, 248, 42)
         makeBtn(rowA, {text="Reset Camera", size=UDim2.new(0.34,-6,1,0),
             onClick=function()
                 cameraLocked = true
@@ -1985,6 +2494,12 @@ do
             "  Use seek / step binds to navigate the recording",
             "  Press MMB while paused to continue recording",
             "  Remove Pauses strips idle frames",
+            "",
+            "Legit Mode:",
+            "  Enable it in Settings",
+            "  Recording spawns a local clone and mirrors",
+            "  your controls onto it",
+            "  Playback drives the real character",
             "",
             "Customization:",
             "  See the Binds tab to change any key",
@@ -2135,6 +2650,7 @@ do
                 stColor = C.warning
                 stText = stText .. " / PAUSED"
             end
+            if legit.active then stText = stText .. " / LEGIT" end
 
             if statState.Text ~= stText then statState.Text = stText end
             if statState.TextColor3 ~= stColor then statState.TextColor3 = stColor end
@@ -2154,7 +2670,7 @@ do
         pcall(function()
             if not hudScreen.Enabled or not hudText.Parent then return end
 
-            local char = PLAYER.Character
+            local char = (legit.active and legit.clone) or PLAYER.Character
             local root = char and char:FindFirstChild("HumanoidRootPart")
             local hum  = char and char:FindFirstChildOfClass("Humanoid")
             if not root or not hum then
@@ -2229,6 +2745,7 @@ do
             elseif isPaused and (state=="create" or state=="edittest") then
                 hudStateText = hudStateText .. " / PAUSED"
             end
+            if legit.active then hudStateText = hudStateText .. " / LEGIT" end
             local newTitle = "NexusTAS - " .. hudStateText
             if hudTitle.Text ~= newTitle then hudTitle.Text = newTitle end
 
