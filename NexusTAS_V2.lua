@@ -5,9 +5,11 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
 local PLAYER = Players.LocalPlayer
+local GENV = (type(getgenv) == "function" and getgenv()) or _G
 
-local VERSION = "2.0"
+local VERSION = "2.0.1"
 
 -- Resolve a character without infinite WaitForChild hangs. Some custom rigs
 -- have no Animator (or a differently named root), so create one and fall back
@@ -70,7 +72,7 @@ local function destroyOldGuis()
     if ok and core then parents[#parents + 1] = core end
     local pg = PLAYER:FindFirstChild("PlayerGui")
     if pg then parents[#parents + 1] = pg end
-    local names = { "NexusTASLocal", "NexusTASLocalToasts", "NexusTASHUD" }
+    local names = { "NexusTASLocal", "NexusTASLocalToasts", "NexusTASHUD", "NexusTASImport" }
     for _, parent in ipairs(parents) do
         for _, name in ipairs(names) do
             local obj = parent:FindFirstChild(name)
@@ -83,18 +85,32 @@ local function cleanupPrevious()
     -- Stop any previous injection without hard-coding its name, so both the
     -- current build and older builds are replaced cleanly on re-inject.
     local stopKeys, connLists = {}, {}
-    for key, value in pairs(_G) do
-        if type(key) == "string" then
-            if key:match("^__%a+Shutdown$") and type(value) == "function" then
-                stopKeys[#stopKeys + 1] = key
-            elseif key:match("^__%a+Connections$") and type(value) == "table" then
-                connLists[#connLists + 1] = value
+    local seenStops, seenLists = {}, {}
+    local function scan(env)
+        for key, value in pairs(env) do
+            if type(key) == "string" then
+                if key:match("^__%a+Shutdown$") and type(value) == "function" then
+                    if not seenStops[key] then
+                        seenStops[key] = true
+                        stopKeys[#stopKeys + 1] = key
+                    end
+                elseif key:match("^__%a+Connections$") and type(value) == "table" then
+                    if not seenLists[value] then
+                        seenLists[value] = true
+                        connLists[#connLists + 1] = value
+                    end
+                end
             end
         end
     end
+    scan(_G)
+    if GENV ~= _G then scan(GENV) end
+
     for _, key in ipairs(stopKeys) do
-        pcall(_G[key])
+        local fn = _G[key] or GENV[key]
+        if fn then pcall(fn) end
         _G[key] = nil
+        GENV[key] = nil
     end
     for _, list in ipairs(connLists) do
         for _, conn in ipairs(list) do
@@ -102,6 +118,7 @@ local function cleanupPrevious()
         end
     end
     _G.__NexusConnections = nil
+    GENV.__NexusConnections = nil
     pcall(function() RunService:UnbindFromRenderStep("NexusTASCamera") end)
     pcall(function() RunService:UnbindFromRenderStep("NexusTASSingleTick") end)
     pcall(function() RunService:UnbindFromRenderStep("NexusTASMenuMouse") end)
@@ -1376,12 +1393,12 @@ local function recomputeTimes()
 end
 
 -- ==================== MODES ====================
-local function goIdle()
+local function goIdle(keepMenu)
     if ghost.active and exitGhost then exitGhost() end
     playbackOffset = nil
     cancelSafeTest()
     bindingControl = nil
-    drawMenuVisible = false
+    if not keepMenu then drawMenuVisible = false end
     mode = "idle"
     frame = 1
     paused = false
@@ -1793,6 +1810,741 @@ local function optimizeTAS()
     frame = #data
     setStatus("TAS optimized (" .. #data .. " frames)")
     popup("TAS optimized", 1.8)
+end
+
+-- ==================== SAVE / LOAD ====================
+-- Flat files in the executor workspace: NexusTAS_run_*.json. No subfolders,
+-- because some Solara builds cannot create directories under their workspace.
+local FILE_PREFIX = "NexusTAS_"
+local MANIFEST = "NexusTAS_index.json"
+local savedRuns = {}
+local fileStorageUsable = nil
+local memorySaves = GENV.__NexusMemorySaves
+if type(memorySaves) ~= "table" then
+    memorySaves = {}
+    GENV.__NexusMemorySaves = memorySaves
+end
+-- Exact paths of files saved during this executor session. Solara's listfiles
+-- can resolve relative paths differently from writefile, so merge both.
+local saveIndex = GENV.__NexusSaveIndex
+if type(saveIndex) ~= "table" then
+    saveIndex = {}
+    GENV.__NexusSaveIndex = saveIndex
+end
+
+local function hasFileApi()
+    return type(writefile) == "function"
+        and type(readfile) == "function"
+        and type(listfiles) == "function"
+end
+
+local function fileExists(path)
+    if type(isfile) ~= "function" then return false end
+    local ok, result = pcall(isfile, path)
+    return ok and result
+end
+
+local function nameInUse(name)
+    if memorySaves[name] then return true end
+    for _, storedName in pairs(saveIndex) do
+        if storedName == name then return true end
+    end
+    return false
+end
+
+-- writefile and readfile can resolve relative paths differently in Solara.
+-- Probe a few locations once and use the first one that round-trips.
+local fileBase = nil
+
+local function testFileBase(prefix)
+    local probe = prefix .. "NexusTAS_probe.txt"
+    local okWrite = pcall(function() writefile(probe, "ok") end)
+    if not okWrite then return false end
+    for _ = 1, 6 do
+        task.wait(0.1)
+        if type(isfile) == "function" then
+            local ok, exists = pcall(isfile, probe)
+            if ok and exists then
+                pcall(function() delfile(probe) end)
+                return true
+            end
+        else
+            local ok, content = pcall(function() return readfile(probe) end)
+            if ok and content == "ok" then
+                pcall(function() delfile(probe) end)
+                return true
+            end
+        end
+    end
+    task.delay(1, function()
+        if type(delfile) == "function" then pcall(function() delfile(probe) end) end
+    end)
+    return false
+end
+
+local function resolveFileBase()
+    if fileBase ~= nil then return fileBase or nil end
+    if not hasFileApi() then
+        fileBase = false
+        return nil
+    end
+
+    local candidates, seen = {}, {}
+    local function add(path)
+        if type(path) ~= "string" or path == "" then return end
+        if path:sub(-1) ~= "/" and path:sub(-1) ~= "\\" then path = path .. "/" end
+        if not seen[path] then
+            seen[path] = true
+            candidates[#candidates + 1] = path
+        end
+    end
+
+    local override = GENV.__NexusFileBase
+    if type(override) == "string" and override ~= "" then
+        if testFileBase(override) then
+            fileBase = override
+            return override
+        end
+    end
+
+    pcall(function()
+        local fn
+        if type(getworkspace) == "function" then
+            fn = getworkspace
+        elseif getgenv and type(getgenv().getworkspace) == "function" then
+            fn = getgenv().getworkspace
+        end
+        if fn then
+            local ok, path = pcall(fn)
+            if ok then add(path) end
+        end
+    end)
+
+    if getgenv then
+        local genv
+        pcall(function() genv = getgenv() end)
+        if type(genv) == "table" then
+            for _, value in pairs(genv) do
+                if type(value) == "string" and #value < 260 and not value:find("\n")
+                    and (value:match("^%a:[/\\]") or value:lower():find("solara", 1, true)) then
+                    add(value)
+                    add(value .. "/workspace")
+                    add(value .. "\\workspace")
+                end
+            end
+        end
+    end
+
+    local env = {}
+    pcall(function()
+        if type(os) == "table" and type(os.getenv) == "function" then
+            for _, key in ipairs({ "LOCALAPPDATA", "APPDATA", "USERPROFILE", "TEMP", "TMP" }) do
+                local ok, value = pcall(os.getenv, key)
+                if ok and type(value) == "string" and value ~= "" then env[key] = value end
+            end
+        end
+    end)
+
+    local function addSolara(base)
+        add(base .. "\\Solara\\workspace")
+        add(base .. "\\Solara")
+        add(base .. "\\Programs\\Solara\\workspace")
+        add(base .. "\\Programs\\Solara")
+    end
+    if env.LOCALAPPDATA then addSolara(env.LOCALAPPDATA) end
+    if env.APPDATA then addSolara(env.APPDATA) end
+    if env.USERPROFILE then
+        addSolara(env.USERPROFILE)
+        add(env.USERPROFILE .. "\\Downloads\\Solara\\workspace")
+        add(env.USERPROFILE .. "\\Desktop\\Solara\\workspace")
+    end
+    if env.TEMP then add(env.TEMP .. "\\Solara\\workspace") end
+
+    local userName = PLAYER and PLAYER.Name or ""
+    if userName ~= "" then
+        add("C:\\Users\\" .. userName .. "\\AppData\\Local\\Solara\\workspace")
+        add("C:\\Users\\" .. userName .. "\\AppData\\Roaming\\Solara\\workspace")
+        add("C:\\Users\\" .. userName .. "\\AppData\\Local\\Programs\\Solara\\workspace")
+        add("C:\\Users\\" .. userName .. "\\Solara\\workspace")
+        add("C:\\Users\\" .. userName .. "\\Downloads\\Solara\\workspace")
+        add("C:\\Users\\" .. userName .. "\\Desktop\\Solara\\workspace")
+        add("C:\\Users\\" .. userName .. "\\AppData\\Local\\Temp\\Solara\\workspace")
+    end
+
+    local defaults = {
+        "",
+        "workspace/",
+        "./",
+        "C:/Users/Public/",
+        "C:\\Users\\Public\\",
+        "C:/Users/Public/Documents/",
+        "C:\\Users\\Public\\Documents\\",
+        "C:/Windows/System32/workspace/",
+        "C:\\Windows\\System32\\workspace\\",
+    }
+    for _, path in ipairs(defaults) do add(path) end
+
+    for _, prefix in ipairs(candidates) do
+        if testFileBase(prefix) then
+            fileBase = prefix
+            return prefix
+        end
+    end
+    fileBase = false
+    return nil
+end
+
+task.spawn(function()
+    resolveFileBase()
+end)
+
+local function mergeManifest()
+    if not hasFileApi() or not HttpService then return end
+    local base = resolveFileBase()
+    if not base then return end
+    local okRead, raw = pcall(function() return readfile(base .. MANIFEST) end)
+    if not okRead or type(raw) ~= "string" or raw == "" then return end
+    local okJson, data = pcall(function() return HttpService:JSONDecode(raw) end)
+    if not okJson or type(data) ~= "table" then return end
+    for name, path in pairs(data) do
+        if type(name) == "string" and type(path) == "string" and not saveIndex[path] then
+            saveIndex[path] = name
+        end
+    end
+end
+
+local function writeManifest()
+    if not hasFileApi() or not HttpService then return end
+    local base = resolveFileBase()
+    if not base then return end
+    local data = {}
+    for path, name in pairs(saveIndex) do
+        if type(path) == "string" and type(name) == "string" then
+            data[name] = path
+        end
+    end
+    local okJson, json = pcall(function() return HttpService:JSONEncode(data) end)
+    if not okJson then return end
+    pcall(function() writefile(base .. MANIFEST, json) end)
+end
+
+local function encVec(v)
+    if not v then return nil end
+    return { x = v.X, y = v.Y, z = v.Z }
+end
+
+local function decVec(t)
+    if type(t) ~= "table" then return Vector3.zero end
+    return Vector3.new(tonumber(t.x) or 0, tonumber(t.y) or 0, tonumber(t.z) or 0)
+end
+
+local function encCF(cf)
+    if not cf then return nil end
+    local x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22 = cf:GetComponents()
+    return {
+        x = x, y = y, z = z,
+        r00 = r00, r01 = r01, r02 = r02,
+        r10 = r10, r11 = r11, r12 = r12,
+        r20 = r20, r21 = r21, r22 = r22,
+    }
+end
+
+local function decCF(t)
+    if type(t) ~= "table" then return nil end
+    local x, y, z = tonumber(t.x), tonumber(t.y), tonumber(t.z)
+    local r00, r01, r02 = tonumber(t.r00), tonumber(t.r01), tonumber(t.r02)
+    local r10, r11, r12 = tonumber(t.r10), tonumber(t.r11), tonumber(t.r12)
+    local r20, r21, r22 = tonumber(t.r20), tonumber(t.r21), tonumber(t.r22)
+    if not (x and y and z and r00 and r01 and r02 and r10 and r11 and r12 and r20 and r21 and r22) then
+        return nil
+    end
+    local ok, cf = pcall(function()
+        return CFrame.new(x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22)
+    end)
+    if ok then return cf end
+    return nil
+end
+
+local function encodeFrame(f)
+    return {
+        cf = encCF(f.cf),
+        vel = encVec(f.vel),
+        ang = encVec(f.ang),
+        state = f.state and f.state.Name or "Running",
+        camCFrame = encCF(f.camCFrame),
+        camFOV = f.camFOV,
+        zoom = f.zoom,
+        shiftLock = f.shiftLock and true or false,
+        dt = f.dt,
+        t = f.t,
+        anim = f.anim and {
+            Pose = f.anim.Pose,
+            JumpTime = f.anim.JumpTime,
+            Speed = f.anim.Speed,
+            Anims = f.anim.Anims,
+        } or nil,
+    }
+end
+
+local function decodeFrame(t)
+    if type(t) ~= "table" then return nil end
+    local cf = decCF(t.cf)
+    if not cf then return nil end
+    local f = {
+        cf = cf,
+        vel = decVec(t.vel),
+        ang = decVec(t.ang),
+        state = Enum.HumanoidStateType.Running,
+        camCFrame = decCF(t.camCFrame),
+        camFOV = tonumber(t.camFOV) or 70,
+        zoom = tonumber(t.zoom) or 0,
+        shiftLock = t.shiftLock and true or false,
+        dt = tonumber(t.dt) or (1 / 60),
+        t = tonumber(t.t) or 0,
+    }
+    if type(t.state) == "string" then
+        pcall(function()
+            f.state = Enum.HumanoidStateType[t.state] or f.state
+        end)
+    end
+    if type(t.anim) == "table" then
+        f.anim = {
+            Pose = tonumber(t.anim.Pose) or 0,
+            JumpTime = tonumber(t.anim.JumpTime) or 0,
+            Speed = tonumber(t.anim.Speed) or 1,
+            Anims = {},
+        }
+        if type(t.anim.Anims) == "table" then
+            for _, a in ipairs(t.anim.Anims) do
+                if type(a) == "table" then
+                    f.anim.Anims[#f.anim.Anims + 1] = {
+                        tonumber(a[1]) or 0,
+                        tonumber(a[2]) or 0,
+                    }
+                end
+            end
+        end
+    end
+    return f
+end
+
+local function refreshSavedRuns()
+    savedRuns = {}
+    local seenNames = {}
+
+    mergeManifest()
+    for path, name in pairs(saveIndex) do
+        if type(path) == "string" and type(name) == "string" and not seenNames[name] then
+            seenNames[name] = true
+            savedRuns[#savedRuns + 1] = { path = path, name = name }
+        end
+    end
+
+    if hasFileApi() then
+        local base = resolveFileBase()
+        if not base then fileStorageUsable = false end
+        if base then
+            local function addFiles(files, prefix)
+                if type(files) ~= "table" then return end
+                for _, entry in ipairs(files) do
+                    if type(entry) == "string" then
+                        local baseName = entry:match("([^/\\]+)$") or entry
+                        if baseName:sub(1, #FILE_PREFIX) == FILE_PREFIX
+                            and baseName:sub(-5) == ".json" then
+                            local name = baseName:sub(#FILE_PREFIX + 1, -6)
+                            if name:sub(1, 4) == "run_" and not seenNames[name] then
+                                local path = entry
+                                if not path:find("[/\\]") and prefix ~= "" then
+                                    path = prefix .. path
+                                end
+                                seenNames[name] = true
+                                savedRuns[#savedRuns + 1] = { path = path, name = name }
+                            end
+                        end
+                    end
+                end
+            end
+
+            local ok, files = pcall(function() return listfiles(base) end)
+            if ok then addFiles(files, base) end
+            local trimmed = base:gsub("/+$", "")
+            if trimmed ~= base then
+                ok, files = pcall(function() return listfiles(trimmed) end)
+                if ok then addFiles(files, base) end
+            end
+        end
+    end
+
+    for name, content in pairs(memorySaves) do
+        if type(name) == "string" and type(content) == "string" and not seenNames[name] then
+            seenNames[name] = true
+            savedRuns[#savedRuns + 1] = { path = "mem:" .. name, name = name }
+        end
+    end
+
+    table.sort(savedRuns, function(a, b) return a.name > b.name end)
+end
+
+local function makeRunPayload()
+    if #data == 0 then return nil, "Nothing to save" end
+    if not HttpService then return nil, "JSON service unavailable" end
+
+    local stamp
+    pcall(function()
+        stamp = DateTime.now():FormatLocalTime("YYYY-MM-DD_HH-mm-ss", "en-us")
+    end)
+    if not stamp then stamp = tostring(math.floor(tick())) end
+
+    local frames = {}
+    for i, f in ipairs(data) do frames[i] = encodeFrame(f) end
+    return {
+        format = 1,
+        version = VERSION,
+        savedAt = stamp,
+        frameCount = #data,
+        frames = frames,
+    }, stamp
+end
+
+local function saveCurrentRun()
+    local payload, stamp = makeRunPayload()
+    if not payload then
+        popup(stamp, 2)
+        return
+    end
+
+    local base = "run_" .. stamp
+    local fileBasePath = hasFileApi() and resolveFileBase() or nil
+    local saveName = base
+    local suffix = 2
+    while nameInUse(saveName)
+        or (fileBasePath and fileExists(fileBasePath .. FILE_PREFIX .. saveName .. ".json")) do
+        saveName = base .. "_" .. suffix
+        suffix += 1
+    end
+
+    local okJson, json = pcall(function() return HttpService:JSONEncode(payload) end)
+    if not okJson or type(json) ~= "string" then
+        popup("Could not encode run", 3)
+        return
+    end
+
+    -- Keep a session copy as a load fallback even when the file write works.
+    memorySaves[saveName] = json
+
+    local savedToFile = false
+    local savedPath = nil
+    local writeError = nil
+    if fileBasePath then
+        local path = fileBasePath .. FILE_PREFIX .. saveName .. ".json"
+        savedPath = path
+        local okWrite, err = pcall(function() writefile(path, json) end)
+        if okWrite then
+            savedToFile = true
+            fileStorageUsable = true
+            saveIndex[path] = saveName
+            GENV.__NexusLastSave = { path = path, json = json }
+            writeManifest()
+            task.delay(1, function() writeManifest() end)
+        else
+            fileStorageUsable = false
+            writeError = err
+        end
+    end
+
+    if writeError then
+        warn("[NexusTAS] File save unavailable, using session storage: " .. tostring(writeError))
+    end
+
+    if savedToFile and savedPath and type(isfile) == "function" then
+        task.delay(2, function()
+            local ok, exists = pcall(isfile, savedPath)
+            if ok and not exists then
+                fileStorageUsable = false
+                popup("File storage unavailable - using session storage", 3)
+            end
+        end)
+    end
+
+    refreshSavedRuns()
+    setStatus(string.format("Saved run (%d frames)", #data))
+    popup(savedToFile and "Run saved" or "Run saved (session)", 2)
+end
+
+local function loadRunFromString(raw)
+    if not HttpService then return false, "JSON service unavailable" end
+    if type(raw) ~= "string" or raw == "" then return false, "Could not read run" end
+
+    local okJson, payload = pcall(function() return HttpService:JSONDecode(raw) end)
+    if not okJson or type(payload) ~= "table" or type(payload.frames) ~= "table" then
+        return false, "Invalid run file"
+    end
+
+    local frames = {}
+    for _, t in ipairs(payload.frames) do
+        local f = decodeFrame(t)
+        if f then frames[#frames + 1] = f end
+    end
+    if #frames == 0 then return false, "Run has no frames" end
+
+    goIdle(true)
+    data = frames
+    frame = 1
+    lastPauseFrame = 1
+    recomputeTimes()
+    setStatus(string.format("Loaded run (%d frames)", #frames))
+    return true
+end
+
+local function loadSavedRun(path)
+    local name
+    local raw
+    if path:sub(1, 4) == "mem:" then
+        name = path:sub(5)
+        raw = memorySaves[name]
+    else
+        name = saveIndex[path]
+        if not name then
+            local baseName = path:match("([^/\\]+)$") or path
+            if baseName:sub(1, #FILE_PREFIX) == FILE_PREFIX then
+                name = baseName:sub(#FILE_PREFIX + 1, -6)
+            end
+        end
+        if hasFileApi() then
+            local okRead, content = pcall(function() return readfile(path) end)
+            if okRead and type(content) == "string" and content ~= "" then
+                raw = content
+            end
+        end
+        if (not raw or raw == "") and name and type(memorySaves[name]) == "string" then
+            raw = memorySaves[name]
+        end
+    end
+    if type(raw) ~= "string" or raw == "" then
+        popup("Could not read run", 3)
+        return
+    end
+
+    local ok, err = loadRunFromString(raw)
+    if ok then
+        popup("Run loaded", 2)
+    else
+        popup(err, 3)
+    end
+end
+
+local function exportRunToClipboard()
+    local payload = makeRunPayload()
+    if not payload then
+        popup("Nothing to export", 2)
+        return
+    end
+    if type(setclipboard) ~= "function" then
+        popup("Clipboard unavailable", 3)
+        return
+    end
+    if not HttpService then
+        popup("JSON service unavailable", 3)
+        return
+    end
+    local ok, json = pcall(function() return HttpService:JSONEncode(payload) end)
+    if not ok or type(json) ~= "string" then
+        popup("Could not encode run", 3)
+        return
+    end
+    local okClip = pcall(setclipboard, json)
+    if okClip then
+        popup("Run copied to clipboard", 2)
+    else
+        popup("Clipboard failed", 3)
+    end
+end
+
+local function importRunFromText(text)
+    local ok, err = loadRunFromString(text)
+    if ok then
+        popup("Run imported", 2)
+    else
+        popup(err, 3)
+    end
+end
+
+local function openImportBox()
+    local getClip = getclipboard or (getgenv and getgenv().getclipboard)
+    if type(getClip) == "function" then
+        local ok, text = pcall(getClip)
+        if ok and type(text) == "string" and text ~= "" then
+            importRunFromText(text)
+            return
+        end
+    end
+
+    local parent
+    pcall(function()
+        if type(gethui) == "function" then parent = gethui() end
+    end)
+    if not parent then
+        pcall(function() parent = game:GetService("CoreGui") end)
+    end
+    if not parent then
+        pcall(function() parent = PLAYER:FindFirstChild("PlayerGui") end)
+    end
+    if not parent then
+        popup("Clipboard import unavailable", 3)
+        return
+    end
+
+    local old = parent:FindFirstChild("NexusTASImport")
+    if old then pcall(function() old:Destroy() end) end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "NexusTASImport"
+    gui.IgnoreGuiInset = true
+    gui.ResetOnSpawn = false
+    gui.Parent = parent
+
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.fromScale(0.6, 0.32)
+    box.Position = UDim2.fromScale(0.2, 0.34)
+    box.BackgroundColor3 = Color3.fromRGB(10, 20, 30)
+    box.TextColor3 = Color3.fromRGB(235, 245, 250)
+    box.BorderSizePixel = 0
+    box.TextWrapped = true
+    box.MultiLine = true
+    box.ClearTextOnFocus = false
+    box.Font = Enum.Font.Code
+    box.TextSize = 14
+    box.PlaceholderText = "Paste NexusTAS run data and press Enter"
+    box.Text = ""
+    box.Parent = gui
+    pcall(function() box:CaptureFocus() end)
+    box.FocusLost:Connect(function(enter)
+        local text = box.Text
+        gui:Destroy()
+        if enter and text ~= "" then importRunFromText(text) end
+    end)
+end
+
+local function deleteSavedRun(path)
+    if path:sub(1, 4) == "mem:" then
+        memorySaves[path:sub(5)] = nil
+    else
+        if type(delfile) ~= "function" then
+            popup("File API unavailable", 3)
+            return
+        end
+        local ok = pcall(delfile, path)
+        if not ok then
+            popup("Delete failed", 3)
+            return
+        end
+        local name = saveIndex[path]
+        if not name then
+            local baseName = path:match("([^/\\]+)$") or path
+            if baseName:sub(1, #FILE_PREFIX) == FILE_PREFIX then
+                name = baseName:sub(#FILE_PREFIX + 1, -6)
+            end
+        end
+        saveIndex[path] = nil
+        if name then memorySaves[name] = nil end
+        writeManifest()
+    end
+    refreshSavedRuns()
+    popup("Run deleted", 2)
+end
+
+if _G.__NexusDebug then
+    _G.__NexusDebug.saveRun = function() saveCurrentRun() end
+    _G.__NexusDebug.loadRun = function(path) loadSavedRun(path) end
+    _G.__NexusDebug.runs = function()
+        refreshSavedRuns()
+        return savedRuns
+    end
+    _G.__NexusDebug.storageInfo = function()
+        local out = {}
+        local execName, execVersion = "?", "?"
+        pcall(function() execName, execVersion = identifyexecutor() end)
+        out[#out + 1] = "executor: " .. tostring(execName) .. " " .. tostring(execVersion)
+        out[#out + 1] = "api: write=" .. type(writefile)
+            .. " read=" .. type(readfile)
+            .. " list=" .. type(listfiles)
+            .. " isfile=" .. type(isfile)
+            .. " isfolder=" .. type(isfolder)
+            .. " makefolder=" .. type(makefolder)
+            .. " delfile=" .. type(delfile)
+
+        local ws
+        pcall(function()
+            if type(getworkspace) == "function" then ws = getworkspace() end
+        end)
+        out[#out + 1] = "getworkspace: " .. tostring(ws)
+        if getgenv then
+            local gws
+            pcall(function() gws = getgenv().workspace end)
+            out[#out + 1] = "getgenv().workspace: " .. tostring(gws)
+        end
+
+        local function list(path)
+            local ok, files = pcall(function() return listfiles(path) end)
+            if not ok then
+                out[#out + 1] = "listfiles(" .. tostring(path) .. ") error: " .. tostring(files)
+                return
+            end
+            local n = type(files) == "table" and #files or -1
+            out[#out + 1] = "listfiles(" .. tostring(path) .. ") count=" .. tostring(n)
+            if type(files) == "table" then
+                for i = 1, math.min(#files, 8) do
+                    out[#out + 1] = "  " .. tostring(files[i])
+                end
+            end
+        end
+        list("")
+        list("workspace")
+        list("C:/Users/Public/")
+
+        local candidates = {
+            "",
+            "workspace/",
+            "./",
+            "C:/Users/Public/",
+            "C:/Users/Public/Documents/",
+            "C:/Windows/System32/workspace/",
+        }
+        for _, prefix in ipairs(candidates) do
+            local probe = prefix .. "NexusTAS_diag.txt"
+            local okW, errW = pcall(function() writefile(probe, "ok") end)
+            local okR, content = pcall(function() return readfile(probe) end)
+            local exists
+            if type(isfile) == "function" then
+                local okI, v = pcall(isfile, probe)
+                exists = okI and v
+            end
+            out[#out + 1] = string.format(
+                "%s write=%s(%s) read=%s(%s) isfile=%s",
+                probe, tostring(okW), tostring(errW),
+                tostring(okR), tostring(content), tostring(exists))
+            pcall(function()
+                if type(delfile) == "function" then delfile(probe) end
+            end)
+        end
+
+        -- Delayed check: Solara may flush files asynchronously.
+        local delayed = "NexusTAS_diag_delayed.txt"
+        local okWrite = pcall(function() writefile(delayed, "ok") end)
+        task.wait(2)
+        local okExists, exists = pcall(function() return isfile(delayed) end)
+        local okRead, content = pcall(function() return readfile(delayed) end)
+        out[#out + 1] = string.format(
+            "delayed %s write=%s isfile=%s(%s) read=%s(%s)",
+            delayed, tostring(okWrite), tostring(okExists), tostring(exists),
+            tostring(okRead), tostring(content))
+        list("")
+        pcall(function()
+            if type(delfile) == "function" then delfile(delayed) end
+        end)
+
+        return table.concat(out, "\n")
+    end
 end
 
 -- ==================== RECORDING / PLAYBACK TIMING ====================
@@ -2500,6 +3252,11 @@ if HUMAN then
 end
 
 -- ==================== GUI (DRAW API) ====================
+-- The GUI has its own function so its locals do not count against the main
+-- chunk's 200-register limit.
+local drawShutdown
+local function setupGui()
+
 -- Everything is rendered with Solara's Drawing API. Input is handled by
 -- hit-testing rectangles against UserInputService:GetMouseLocation().
 
@@ -2732,10 +3489,11 @@ local function buildMenuPrimitives()
     local tabs = {
         { "controls", "Controls" },
         { "settings", "Settings" },
+        { "saves", "Saves" },
         { "help", "Help" },
         { "info", "Info" },
     }
-    local tabW, tabH, gap = 118, 24, 4
+    local tabW, tabH, gap = 94, 24, 4
     local tx = x + 12
     local ty = y + 38
     for _, tab in ipairs(tabs) do
@@ -2749,7 +3507,10 @@ local function buildMenuPrimitives()
         end
         txt(tx + tabW * 0.5, ty + 5, 11, label, active and COL.text or COL.subtext,
             Drawing.Fonts.UI, 0, 22, true, true)
-        addHit(id, tx, ty, tabW, tabH, function() drawTab = key end)
+        addHit(id, tx, ty, tabW, tabH, function()
+            drawTab = key
+            if key == "saves" then refreshSavedRuns() end
+        end)
         tx += tabW + gap
     end
 
@@ -2837,6 +3598,62 @@ local function buildMenuPrimitives()
         end)
         txt(minusX + 27, y2 + 6, 11, string.format("%.2f", settings.playbackSpeed),
             COL.text, Drawing.Fonts.Monospace, 0, 21, false, true)
+    elseif drawTab == "saves" then
+        local basePath = fileBase
+        local fileMode = hasFileApi() and fileStorageUsable ~= false
+            and basePath ~= nil and basePath ~= false
+        drawButton("save_run", cx, cy, 180, 24, "Save Current Run", function()
+            saveCurrentRun()
+        end)
+        drawButton("refresh_runs", cx + 190, cy, 90, 24, "Refresh", function()
+            refreshSavedRuns()
+        end)
+        local storageLabel
+        if fileMode then
+            storageLabel = basePath == ""
+                and "Files: workspace root"
+                or ("Files: " .. basePath)
+            if #storageLabel > 48 then storageLabel = storageLabel:sub(1, 45) .. "..." end
+        else
+            storageLabel = hasFileApi() and basePath == nil
+                and "Checking storage..."
+                or "Session storage (no persistent path)"
+        end
+        txt(cx, cy + 30, 10, storageLabel,
+            fileMode and COL.subtext or COL.danger,
+            Drawing.Fonts.UI, 0, 21, false, true)
+
+        drawButton("export_run", cx, cy + 46, 150, 20, "Export Clipboard", function()
+            exportRunToClipboard()
+        end)
+        drawButton("import_run", cx + 160, cy + 46, 150, 20, "Import Clipboard", function()
+            openImportBox()
+        end)
+
+        local ry = cy + 76
+        if #savedRuns == 0 then
+            txt(cx + 2, ry, 11, "No saved runs.",
+                COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
+        else
+            local maxRows = 12
+            for i = 1, math.min(#savedRuns, maxRows) do
+                local run = savedRuns[i]
+                sq(cx, ry, cw, 22, (i % 2 == 0) and COL.rowAlt or COL.row, 0.1, 12, true)
+                txt(cx + 8, ry + 5, 10, run.name,
+                    COL.text, Drawing.Fonts.Monospace, 0, 21, false, true)
+                drawButton("load_run_" .. i, cx + cw - 124, ry + 2, 62, 18, "Load", function()
+                    loadSavedRun(run.path)
+                end)
+                drawButton("del_run_" .. i, cx + cw - 58, ry + 2, 54, 18, "Del", function()
+                    deleteSavedRun(run.path)
+                end)
+                ry += 25
+            end
+            if #savedRuns > maxRows then
+                txt(cx + 2, ry, 10, "+" .. (#savedRuns - maxRows) .. " more",
+                    COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
+            end
+        end
     elseif drawTab == "help" then
         local lines = {
             "CONTROLS", "",
@@ -2870,11 +3687,13 @@ local function buildMenuPrimitives()
             "- Relative playback in Ghost Mode",
             "- Safe Test with on-screen START marker",
             "- Key conflict detection",
+            "- Local save/load (NexusTAS/runs)",
             "- Drawing API interface",
             "- R6 Animate fork", "",
             "NOTES",
             "- R6 character required for animation recording.",
-            "- TAS is kept in memory for the current session.",
+            "- Save/load uses the executor workspace or session storage.",
+            "- Export/Import works through the clipboard.",
             "- Re-injecting replaces the previous instance.",
         }
         for i, line in ipairs(lines) do
@@ -3193,7 +4012,7 @@ end)
 
 connect(RunService.RenderStepped, renderDraw)
 
-local function drawShutdown()
+function drawShutdown()
     for _, obj in ipairs(drawPool) do
         pcall(function() obj:Remove() end)
     end
@@ -3202,6 +4021,9 @@ local function drawShutdown()
     drawCount = 0
     drawHits = {}
 end
+
+end
+setupGui()
 
 -- ==================== START ====================
 setupAnimateFork()
@@ -3224,6 +4046,15 @@ _G.__NexusShutdown = function()
     cancelSafeTest()
     FORK_ID += 1
     _G.__NexusForkID = FORK_ID
+
+    -- Flush the last save and the manifest before the instance is replaced.
+    if GENV.__NexusLastSave then
+        local last = GENV.__NexusLastSave
+        if type(last) == "table" and last.path and last.json then
+            pcall(function() writefile(last.path, last.json) end)
+        end
+    end
+    if writeManifest then pcall(writeManifest) end
 
     for _, conn in ipairs(CONNECTIONS) do
         pcall(function() conn:Disconnect() end)
@@ -3271,6 +4102,7 @@ _G.__NexusShutdown = function()
     _G.__NexusGuiScreen = nil
     _G.__NexusGui = nil
 end
+GENV.__NexusShutdown = _G.__NexusShutdown
 
 print("[NexusTAS] Loaded v" .. VERSION .. " | R6 fork: " .. tostring(isR6()))
 print("[NexusTAS] 1 Idle | 2 Create | 3 Test | LMB pause | V step | F/G frames | M menu")
