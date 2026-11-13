@@ -44,14 +44,14 @@ do
         end
     end
     if unsupported then
-        local message = "NexusTAS пока не поддерживает Eternal Obbying. Простите!"
+        local message = "NexusTAS does not support Eternal Obbying yet. Sorry!"
         warn("[NexusTAS] " .. message)
         print("[NexusTAS] " .. message)
         pcall(function()
             game:GetService("StarterGui"):SetCore("SendNotification", {
                 Title = "NexusTAS",
-                Text = message,
-                Duration = 7,
+                Text = "Eternal Obbying is not supported yet. Sorry!",
+                Duration = 8,
             })
         end)
 
@@ -59,54 +59,144 @@ do
         if type(drawing) == "table" and type(drawing.new) == "function" then
             local cam = workspace.CurrentCamera
             local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
-            local width, height = 500, 76
+            local width, height = 520, 132
             local x = (vp.X - width) * 0.5
-            local y = 84
+            local y = 96
             local font = (type(drawing.Fonts) == "table" and drawing.Fonts.UI) or 0
+            local uis = game:GetService("UserInputService")
 
             local bg = drawing.new("Square")
             bg.Size = Vector2.new(width, height)
             bg.Position = Vector2.new(x, y)
-            bg.Color = Color3.fromRGB(8, 20, 34)
-            bg.Transparency = 0.12
+            bg.Color = Color3.fromRGB(7, 18, 31)
+            bg.Transparency = 0.04
             bg.Filled = true
             bg.Visible = true
+
+            local titleBar = drawing.new("Square")
+            titleBar.Size = Vector2.new(width, 34)
+            titleBar.Position = Vector2.new(x, y)
+            titleBar.Color = Color3.fromRGB(9, 30, 52)
+            titleBar.Transparency = 0.03
+            titleBar.Filled = true
+            titleBar.Visible = true
 
             local border = drawing.new("Square")
             border.Size = Vector2.new(width, height)
             border.Position = Vector2.new(x, y)
-            border.Color = Color3.fromRGB(62, 145, 215)
-            border.Transparency = 0.35
+            border.Color = Color3.fromRGB(30, 83, 125)
+            border.Transparency = 0.15
             border.Thickness = 1
             border.Filled = false
             border.Visible = true
 
+            local accent = drawing.new("Square")
+            accent.Size = Vector2.new(width, 2)
+            accent.Position = Vector2.new(x, y + 34)
+            accent.Color = Color3.fromRGB(62, 145, 215)
+            accent.Transparency = 0.05
+            accent.Filled = true
+            accent.Visible = true
+
             local title = drawing.new("Text")
-            title.Text = "NexusTAS"
-            title.Size = 18
+            title.Text = "NexusTAS V" .. tostring(VERSION)
+            title.Size = 16
             title.Font = font
-            title.Color = Color3.fromRGB(235, 245, 255)
-            title.Position = Vector2.new(vp.X * 0.5, y + 10)
+            title.Color = Color3.fromRGB(222, 238, 252)
+            title.Position = Vector2.new(x + width * 0.5, y + 8)
             title.Center = true
             title.Outline = true
             title.Visible = true
 
-            local body = drawing.new("Text")
-            body.Text = message
-            body.Size = 13
-            body.Font = font
-            body.Color = Color3.fromRGB(160, 205, 235)
-            body.Position = Vector2.new(vp.X * 0.5, y + 40)
-            body.Center = true
-            body.Outline = true
-            body.Visible = true
+            local closeBtn = drawing.new("Square")
+            closeBtn.Size = Vector2.new(22, 22)
+            closeBtn.Position = Vector2.new(x + width - 32, y + 6)
+            closeBtn.Color = Color3.fromRGB(25, 86, 142)
+            closeBtn.Transparency = 0.1
+            closeBtn.Filled = true
+            closeBtn.Visible = true
 
-            task.wait(8)
+            local closeX = drawing.new("Text")
+            closeX.Text = "X"
+            closeX.Size = 12
+            closeX.Font = font
+            closeX.Color = Color3.fromRGB(222, 238, 252)
+            closeX.Position = Vector2.new(x + width - 21, y + 9)
+            closeX.Center = true
+            closeX.Outline = true
+            closeX.Visible = true
+
+            local line1 = drawing.new("Text")
+            line1.Text = "Eternal Obbying is not supported yet."
+            line1.Size = 14
+            line1.Font = font
+            line1.Color = Color3.fromRGB(222, 238, 252)
+            line1.Position = Vector2.new(x + width * 0.5, y + 50)
+            line1.Center = true
+            line1.Outline = true
+            line1.Visible = true
+
+            local line2 = drawing.new("Text")
+            line2.Text = "NexusTAS has stopped. Sorry for the inconvenience."
+            line2.Size = 11
+            line2.Font = font
+            line2.Color = Color3.fromRGB(125, 170, 205)
+            line2.Position = Vector2.new(x + width * 0.5, y + 78)
+            line2.Center = true
+            line2.Outline = true
+            line2.Visible = true
+
+            local line3 = drawing.new("Text")
+            line3.Text = "This game uses its own physics engine."
+            line3.Size = 10
+            line3.Font = font
+            line3.Color = Color3.fromRGB(86, 130, 164)
+            line3.Position = Vector2.new(x + width * 0.5, y + 100)
+            line3.Center = true
+            line3.Outline = true
+            line3.Visible = true
+
+            bg.ZIndex, titleBar.ZIndex, border.ZIndex, accent.ZIndex = 10, 11, 12, 13
+            closeBtn.ZIndex = 13
+            title.ZIndex, closeX.ZIndex, line1.ZIndex, line2.ZIndex, line3.ZIndex = 22, 23, 22, 22, 22
+
+            local closed = false
+            local function overClose()
+                local m = uis:GetMouseLocation()
+                return m.X >= x + width - 32 and m.X <= x + width - 10
+                    and m.Y >= y + 6 and m.Y <= y + 28
+            end
+            local beganConn = uis.InputBegan:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1
+                    or input.UserInputType == Enum.UserInputType.Touch then
+                    if overClose() then closed = true end
+                end
+            end)
+            local changedConn = uis.InputChanged:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseMovement then
+                    closeBtn.Color = overClose()
+                        and Color3.fromRGB(38, 112, 178)
+                        or Color3.fromRGB(25, 86, 142)
+                end
+            end)
+
+            local deadline = os.clock() + 15
+            while not closed and os.clock() < deadline do
+                task.wait(0.1)
+            end
+            pcall(function() beganConn:Disconnect() end)
+            pcall(function() changedConn:Disconnect() end)
             pcall(function()
                 bg:Remove()
+                titleBar:Remove()
                 border:Remove()
+                accent:Remove()
                 title:Remove()
-                body:Remove()
+                closeBtn:Remove()
+                closeX:Remove()
+                line1:Remove()
+                line2:Remove()
+                line3:Remove()
             end)
         else
             task.wait(3)
