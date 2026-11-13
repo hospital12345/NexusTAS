@@ -12,49 +12,83 @@ local GENV = (type(getgenv) == "function" and getgenv()) or _G
 local VERSION = "2.0.1"
 
 -- ==================== UNSUPPORTED GAME GUARD ====================
--- Eternal Obbying replaces Roblox's physics with its own engine. NexusTAS does
--- not support it yet, so show a notice and stop before touching the character.
+-- NexusTAS needs a standard R6 character with Roblox's default Animator. If the
+-- game uses R15, a custom rig, custom physics or a custom animation system, the
+-- recorder cannot work correctly, so show a clear notice and stop.
 do
-    local function isEternalObbying()
-        local okGame, gameId = pcall(function() return game.GameId end)
-        if okGame and gameId == 10760327147 then return true end
-        local okPlace, placeId = pcall(function() return game.PlaceId end)
-        if okPlace and placeId == 82754897145520 then return true end
-        local okRs, rs = pcall(function() return game:GetService("ReplicatedStorage") end)
-        if okRs and rs and rs:FindFirstChild("EO") then return true end
-        local okChar, char = pcall(function()
-            return game:GetService("Players").LocalPlayer.Character
-        end)
-        if okChar and char and char.Name == "EOCharacter" then return true end
-        local okWs, marker = pcall(function() return workspace:FindFirstChild("EOCharacter") end)
-        if okWs and marker then return true end
-        return false
+    local function gameTitle()
+        local name = ""
+        pcall(function() name = game.Name end)
+        if name == nil or name == "" then name = "This game" end
+        return name
     end
 
-    local unsupported = isEternalObbying()
-    if not unsupported then
-        local loaded = true
-        pcall(function() loaded = game:IsLoaded() end)
-        if not loaded then
-            local deadline = os.clock() + 4
+    local gameName = gameTitle()
+    local isEternal = false
+    pcall(function()
+        isEternal = game.GameId == 10760327147 or game.PlaceId == 82754897145520
+    end)
+    if isEternal then
+        gameName = "Eternal Obbying"
+    end
+
+    local reason = nil
+    if isEternal then
+        reason = "This game uses a custom physics engine and character controller."
+    end
+
+    if not reason then
+        local players = game:GetService("Players")
+        local character = players.LocalPlayer.Character
+        if not character then
+            local deadline = os.clock() + 3
             repeat
                 task.wait(0.2)
-                unsupported = isEternalObbying()
-            until unsupported or os.clock() >= deadline
+                character = players.LocalPlayer.Character
+            until character or os.clock() >= deadline
+        end
+
+        if character then
+            local humanoid = character:FindFirstChildOfClass("Humanoid")
+            local r15 = false
+            pcall(function()
+                r15 = humanoid ~= nil and humanoid.RigType == Enum.HumanoidRigType.R15
+            end)
+            if not r15 then
+                r15 = character:FindFirstChild("UpperTorso") ~= nil
+                    or character:FindFirstChild("LowerTorso") ~= nil
+            end
+
+            local customRig = character:FindFirstChild("Torso") == nil
+                or character:FindFirstChild("HumanoidRootPart") == nil
+
+            local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+            local animate = character:FindFirstChild("Animate")
+            local customAnim = humanoid ~= nil and animator == nil and animate == nil
+
+            local gravity = workspace.Gravity
+            local customPhysics = gravity == 0
+                or (humanoid ~= nil and humanoid.WalkSpeed <= 0 and humanoid.AutoRotate == false
+                    and math.abs(gravity - 196.2) > 1)
+
+            if r15 then
+                reason = "This game uses an R15 character rig. NexusTAS currently supports R6 only."
+            elseif customRig then
+                reason = "This game uses a custom character rig."
+            elseif customPhysics then
+                reason = "This game uses a custom physics engine or custom movement controller."
+            elseif customAnim then
+                reason = "This game uses a custom animation system instead of Roblox's default Animator."
+            end
         end
     end
-    if unsupported then
-        local message = "NexusTAS does not support Eternal Obbying yet. Sorry!"
-        warn("[NexusTAS] " .. message)
-        print("[NexusTAS] " .. message)
-        pcall(function()
-            game:GetService("StarterGui"):SetCore("SendNotification", {
-                Title = "NexusTAS",
-                Text = "Eternal Obbying is not supported yet. Sorry!",
-                Duration = 8,
-            })
-        end)
 
+    if reason then
+        local log = "[NexusTAS] " .. gameName .. ": " .. reason
+        warn(log)
+        print(log)
+
+        local discordInvite = ""
         local parent
         pcall(function() parent = gethui and gethui() end)
         if not parent then
@@ -76,8 +110,8 @@ do
             gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
             local frame = Instance.new("Frame")
-            frame.Size = UDim2.fromOffset(520, 140)
-            frame.Position = UDim2.new(0.5, 0, 0, 90)
+            frame.Size = UDim2.fromOffset(580, 200)
+            frame.Position = UDim2.new(0.5, 0, 0, 80)
             frame.AnchorPoint = Vector2.new(0.5, 0)
             frame.BackgroundColor3 = Color3.fromRGB(7, 18, 31)
             frame.BackgroundTransparency = 0
@@ -133,10 +167,10 @@ do
             accent.ZIndex = 3
             accent.Parent = frame
 
-            local function addLine(text, y, size, color, font)
+            local function addLine(text, y, size, height, color, font)
                 local label = Instance.new("TextLabel")
                 label.BackgroundTransparency = 1
-                label.Size = UDim2.new(1, -40, 0, size + 8)
+                label.Size = UDim2.new(1, -40, 0, height)
                 label.Position = UDim2.fromOffset(20, y)
                 label.Font = font or Enum.Font.Gotham
                 label.Text = text
@@ -149,12 +183,18 @@ do
                 return label
             end
 
-            addLine("Eternal Obbying is not supported yet.", 44, 15,
+            addLine(gameName .. " is not supported right now.", 44, 15, 24,
                 Color3.fromRGB(235, 245, 255), Enum.Font.GothamMedium)
-            addLine("NexusTAS has stopped. Sorry for the inconvenience.", 72, 12,
+            addLine("We are actively working on expanding NexusTAS capabilities.", 72, 12, 22,
                 Color3.fromRGB(150, 190, 220))
-            addLine("This game uses its own physics engine.", 96, 11,
-                Color3.fromRGB(100, 140, 170))
+            addLine("Reason: " .. reason, 100, 12, 44,
+                Color3.fromRGB(210, 228, 245))
+            local contact = "If you think this is a mistake, please contact us on Discord."
+            if discordInvite ~= "" then
+                contact = "If you think this is a mistake, contact us on Discord: " .. discordInvite
+            end
+            addLine(contact, 154, 11, 34,
+                Color3.fromRGB(110, 150, 180))
 
             close.MouseButton1Click:Connect(function()
                 gui:Destroy()
@@ -172,7 +212,6 @@ do
         return
     end
 end
-
 
 -- Resolve a character without infinite WaitForChild hangs. Some custom rigs
 -- have no Animator (or a differently named root), so create one and fall back
