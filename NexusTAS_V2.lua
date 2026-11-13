@@ -9,7 +9,93 @@ local HttpService = game:GetService("HttpService")
 local PLAYER = Players.LocalPlayer
 local GENV = (type(getgenv) == "function" and getgenv()) or _G
 
-local VERSION = "2.0.1"
+local VERSION = "2.0.2"
+
+-- ==================== UNSUPPORTED GAME GUARD ====================
+-- Eternal Obbying replaces Roblox's physics with its own engine. NexusTAS does
+-- not support it yet, so show a notice and stop before touching the character.
+do
+    local placeOk, placeId = pcall(function() return game.PlaceId end)
+    local unsupported = placeOk and placeId == 82754897145520
+    if not unsupported then
+        local markerOk, marker = pcall(function()
+            return workspace:FindFirstChild("EOCharacter") ~= nil
+                and game:GetService("ReplicatedStorage"):FindFirstChild("EO") ~= nil
+        end)
+        unsupported = markerOk and marker == true
+    end
+    if unsupported then
+        local message = "NexusTAS пока не поддерживает Eternal Obbying. Простите!"
+        warn("[NexusTAS] " .. message)
+        print("[NexusTAS] " .. message)
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title = "NexusTAS",
+                Text = message,
+                Duration = 7,
+            })
+        end)
+
+        local drawing = Drawing
+        if type(drawing) == "table" and type(drawing.new) == "function" then
+            local cam = workspace.CurrentCamera
+            local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+            local width, height = 500, 76
+            local x = (vp.X - width) * 0.5
+            local y = 84
+            local font = (type(drawing.Fonts) == "table" and drawing.Fonts.UI) or 0
+
+            local bg = drawing.new("Square")
+            bg.Size = Vector2.new(width, height)
+            bg.Position = Vector2.new(x, y)
+            bg.Color = Color3.fromRGB(8, 20, 34)
+            bg.Transparency = 0.12
+            bg.Filled = true
+            bg.Visible = true
+
+            local border = drawing.new("Square")
+            border.Size = Vector2.new(width, height)
+            border.Position = Vector2.new(x, y)
+            border.Color = Color3.fromRGB(62, 145, 215)
+            border.Transparency = 0.35
+            border.Thickness = 1
+            border.Filled = false
+            border.Visible = true
+
+            local title = drawing.new("Text")
+            title.Text = "NexusTAS"
+            title.Size = 18
+            title.Font = font
+            title.Color = Color3.fromRGB(235, 245, 255)
+            title.Position = Vector2.new(vp.X * 0.5, y + 10)
+            title.Center = true
+            title.Outline = true
+            title.Visible = true
+
+            local body = drawing.new("Text")
+            body.Text = message
+            body.Size = 13
+            body.Font = font
+            body.Color = Color3.fromRGB(160, 205, 235)
+            body.Position = Vector2.new(vp.X * 0.5, y + 40)
+            body.Center = true
+            body.Outline = true
+            body.Visible = true
+
+            task.wait(8)
+            pcall(function()
+                bg:Remove()
+                border:Remove()
+                title:Remove()
+                body:Remove()
+            end)
+        else
+            task.wait(3)
+        end
+        return
+    end
+end
+
 
 -- Resolve a character without infinite WaitForChild hangs. Some custom rigs
 -- have no Animator (or a differently named root), so create one and fall back
