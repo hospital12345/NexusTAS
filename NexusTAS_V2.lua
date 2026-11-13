@@ -9,20 +9,39 @@ local HttpService = game:GetService("HttpService")
 local PLAYER = Players.LocalPlayer
 local GENV = (type(getgenv) == "function" and getgenv()) or _G
 
-local VERSION = "2.0.2"
+local VERSION = "2.0.1"
 
 -- ==================== UNSUPPORTED GAME GUARD ====================
 -- Eternal Obbying replaces Roblox's physics with its own engine. NexusTAS does
 -- not support it yet, so show a notice and stop before touching the character.
 do
-    local placeOk, placeId = pcall(function() return game.PlaceId end)
-    local unsupported = placeOk and placeId == 82754897145520
-    if not unsupported then
-        local markerOk, marker = pcall(function()
-            return workspace:FindFirstChild("EOCharacter") ~= nil
-                and game:GetService("ReplicatedStorage"):FindFirstChild("EO") ~= nil
+    local function isEternalObbying()
+        local okGame, gameId = pcall(function() return game.GameId end)
+        if okGame and gameId == 10760327147 then return true end
+        local okPlace, placeId = pcall(function() return game.PlaceId end)
+        if okPlace and placeId == 82754897145520 then return true end
+        local okRs, rs = pcall(function() return game:GetService("ReplicatedStorage") end)
+        if okRs and rs and rs:FindFirstChild("EO") then return true end
+        local okChar, char = pcall(function()
+            return game:GetService("Players").LocalPlayer.Character
         end)
-        unsupported = markerOk and marker == true
+        if okChar and char and char.Name == "EOCharacter" then return true end
+        local okWs, marker = pcall(function() return workspace:FindFirstChild("EOCharacter") end)
+        if okWs and marker then return true end
+        return false
+    end
+
+    local unsupported = isEternalObbying()
+    if not unsupported then
+        local loaded = true
+        pcall(function() loaded = game:IsLoaded() end)
+        if not loaded then
+            local deadline = os.clock() + 4
+            repeat
+                task.wait(0.2)
+                unsupported = isEternalObbying()
+            until unsupported or os.clock() >= deadline
+        end
     end
     if unsupported then
         local message = "NexusTAS пока не поддерживает Eternal Obbying. Простите!"
