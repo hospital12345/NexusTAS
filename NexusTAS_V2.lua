@@ -853,6 +853,7 @@ local drawMenuVisible = false
 local drawTab = "player"
 local searchQuery = ""
 local searchActive = false
+local themeMenuOpen = false
 local drawHits = {}
 local drawMenuX, drawMenuY
 local bindingControl = nil
@@ -3807,8 +3808,11 @@ end
 
 local function toggleGui()
     drawMenuVisible = not drawMenuVisible
-    if not drawMenuVisible and GENV.__NexusSetSearch then
-        GENV.__NexusSetSearch(false)
+    if not drawMenuVisible then
+        themeMenuOpen = false
+        if GENV.__NexusSetSearch then
+            GENV.__NexusSetSearch(false)
+        end
     end
 end
 
@@ -4744,9 +4748,10 @@ local function buildMenuPrimitives()
     local searchX, searchY = x + w - 44 - searchW, y + 7
     sq(searchX, searchY, searchW, searchH, COL.panel, 0.08, 13, true)
     sq(searchX, searchY, searchW, searchH, searchActive and COL.accent or COL.border, 0.45, 14, false, 1)
-    local searchText = searchQuery ~= "" and searchQuery or "Search..."
+    local searchText = searchQuery ~= "" and searchQuery or "Search... (Esc)"
     txt(searchX + 8, searchY + 5, 10, searchText .. (searchActive and "|" or ""),
         searchQuery ~= "" and COL.text or COL.subtext, Drawing.Fonts.Monospace, 0, 22, false, true)
+    GENV.__NexusSearchRect = { x = searchX, y = searchY, w = searchW, h = searchH }
     addHit("search_box", searchX, searchY, searchW, searchH, function()
         if GENV.__NexusSetSearch then
             GENV.__NexusSetSearch(not searchActive)
@@ -4768,6 +4773,7 @@ local function buildMenuPrimitives()
     txt(x + w - 21, y + 10, 12, "X", COL.text, Drawing.Fonts.UI, 0, 23, true, true)
     addHit("menu_close", x + w - 32, y + 7, 22, 22, function()
         drawMenuVisible = false
+        themeMenuOpen = false
         if GENV.__NexusSetSearch then GENV.__NexusSetSearch(false) end
     end)
 
@@ -4798,6 +4804,7 @@ local function buildMenuPrimitives()
             Drawing.Fonts.UI, 0, 22, false, true)
         addHit(id, x + 10, sy, sidebarW - 20, 30, function()
             drawTab = key
+            themeMenuOpen = false
             if key == "saves" then
                 runsLoading = true
                 task.spawn(function()
@@ -4877,7 +4884,7 @@ local function buildMenuPrimitives()
         if shownBinds == 0 then
             txt(cx, ry, 11, "No modules found.", COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
         end
-        local resetY = ry + 3
+        local resetY = ry + (shownBinds == 0 and 24 or 3)
         drawButton("controls_reset", cx, resetY, cw, 20, "Reset to Defaults", function()
             for k, v in pairs(DEFAULT_CONTROLS) do CONTROLS[k] = v end
             bindingControl = nil
@@ -4959,12 +4966,35 @@ local function buildMenuPrimitives()
         sq(cx, themeY, cw, 26, COL.row, 0.1, 12, true)
         txt(cx + 12, themeY + 7, 11, "Theme: " .. tostring(settings.theme),
             COL.text, Drawing.Fonts.UI, 0, 21, false, true)
-        drawButton("theme_prev", cx + cw - 108, themeY + 4, 24, 18, "<", function()
-            THEMES.cycle(-1)
+        txt(cx + cw - 24, themeY + 7, 10, themeMenuOpen and "^" or "v",
+            COL.subtext, Drawing.Fonts.Monospace, 0, 21, false, true)
+        addHit("theme_dropdown", cx, themeY, cw, 26, function()
+            themeMenuOpen = not themeMenuOpen
         end)
-        drawButton("theme_next", cx + cw - 34, themeY + 4, 24, 18, ">", function()
-            THEMES.cycle(1)
-        end)
+
+        if themeMenuOpen then
+            local themeNames = {}
+            for name, theme in pairs(THEMES) do
+                if type(name) == "string" and type(theme) == "table" then
+                    themeNames[#themeNames + 1] = name
+                end
+            end
+            table.sort(themeNames)
+            local optionY = themeY + 29
+            for index, name in ipairs(themeNames) do
+                local active = settings.theme == name
+                sq(cx, optionY, cw, 20, active and COL.button or COL.rowAlt, 0.08, 12, true)
+                txt(cx + 10, optionY + 4, 10, name,
+                    active and COL.text or COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
+                addHit("theme_opt_" .. index, cx, optionY, cw, 20, function()
+                    settings.theme = name
+                    THEMES.apply(name)
+                    themeMenuOpen = false
+                    if STORE and STORE.saveSettings then STORE.saveSettings() end
+                end)
+                optionY += 21
+            end
+        end
     elseif drawTab == "saves" then
         local basePath = fileBase
         local fileMode = hasFileApi() and fileStorageUsable ~= false
@@ -5109,17 +5139,22 @@ local function buildMenuPrimitives()
         local lines = {
             "NexusTAS " .. VERSION, "",
             "CHANGELOG", "",
-            "2.0",
-            "- Ghost Mode with clone recording",
-            "- Relative playback in Ghost Mode",
-            "- Safe Test with on-screen START marker",
-            "- Key conflict detection",
-            "- Local save/load (NexusTAS/runs)",
-            "- Drawing API interface",
-            "- R6 Animate fork", "",
+            "2.0.1",
+            "- ClickGUI with sidebar categories",
+            "- Module search (Player / Binds / Saves)",
+            "- Six color themes",
+            "- Startup Loader with 5 second countdown",
+            "- Loader can be disabled in Client",
+            "- NexusTAS folder with game subfolders",
+            "- Create folders and rename runs",
+            "- FPS is stored with every saved run",
+            "- FPS mismatch prompt (Dismiss / Yes)",
+            "- Settings and keybinds auto-saved",
+            "- Discord link in the menu footer", "",
             "NOTES",
+            "- Settings are saved automatically to NexusTAS/settings.json.",
+            "- Runs are stored in NexusTAS/runs.",
             "- R6 character required for animation recording.",
-            "- Save/load uses the executor workspace or session storage.",
             "- Export/Import works through the clipboard.",
             "- Re-injecting replaces the previous instance.",
         }
@@ -5370,6 +5405,19 @@ drawInputBegan = function(inp)
     if bindingControl then bindingControl = nil end
     local m = UIS:GetMouseLocation()
 
+    if searchActive then
+        local rect = GENV.__NexusSearchRect
+        local inSearch = rect and m.X >= rect.x and m.X <= rect.x + rect.w
+            and m.Y >= rect.y and m.Y <= rect.y + rect.h
+        if not inSearch then
+            if GENV.__NexusSetSearch then
+                GENV.__NexusSetSearch(false)
+            else
+                searchActive = false
+            end
+        end
+    end
+
     if drawToastVisible then
         local vp = drawViewport()
         local w = 320
@@ -5508,6 +5556,10 @@ if _G.__NexusDebug then
         drawTab = tostring(tab)
         drawMenuVisible = true
         return drawTab
+    end
+    _G.__NexusDebug.themeMenu = function(value)
+        themeMenuOpen = value == nil and not themeMenuOpen or value == true
+        return themeMenuOpen
     end
 end
 
