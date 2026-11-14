@@ -110,7 +110,7 @@ do
             gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
             local frame = Instance.new("Frame")
-            frame.Size = UDim2.fromOffset(580, 200)
+            frame.Size = UDim2.new(0, 580, 0, 200)
             frame.Position = UDim2.new(0.5, 0, 0, 80)
             frame.AnchorPoint = Vector2.new(0.5, 0)
             frame.BackgroundColor3 = Color3.fromRGB(7, 18, 31)
@@ -134,7 +134,7 @@ do
 
             local title = Instance.new("TextLabel")
             title.BackgroundTransparency = 1
-            title.Position = UDim2.fromOffset(12, 0)
+            title.Position = UDim2.new(0, 12, 0, 0)
             title.Size = UDim2.new(1, -52, 1, 0)
             title.Font = Enum.Font.GothamMedium
             title.Text = "NexusTAS V" .. tostring(VERSION)
@@ -145,7 +145,7 @@ do
             title.Parent = titleBar
 
             local close = Instance.new("TextButton")
-            close.Size = UDim2.fromOffset(22, 22)
+            close.Size = UDim2.new(0, 22, 0, 22)
             close.Position = UDim2.new(1, -32, 0, 6)
             close.BackgroundColor3 = Color3.fromRGB(25, 86, 142)
             close.BackgroundTransparency = 0
@@ -160,7 +160,7 @@ do
 
             local accent = Instance.new("Frame")
             accent.Size = UDim2.new(1, 0, 0, 2)
-            accent.Position = UDim2.fromOffset(0, 34)
+            accent.Position = UDim2.new(0, 0, 0, 34)
             accent.BackgroundColor3 = Color3.fromRGB(62, 145, 215)
             accent.BackgroundTransparency = 0
             accent.BorderSizePixel = 0
@@ -274,7 +274,7 @@ local function destroyOldGuis()
     if ok and core then parents[#parents + 1] = core end
     local pg = PLAYER:FindFirstChild("PlayerGui")
     if pg then parents[#parents + 1] = pg end
-    local names = { "NexusTASLocal", "NexusTASLocalToasts", "NexusTASHUD", "NexusTASImport" }
+    local names = { "NexusTASLocal", "NexusTASLocalToasts", "NexusTASHUD", "NexusTASImport", "NexusTASLoader", "NexusTASPrompt", "NexusTASFPS", "NexusTASUnsupported" }
     for _, parent in ipairs(parents) do
         for _, name in ipairs(names) do
             local obj = parent:FindFirstChild(name)
@@ -333,6 +333,174 @@ end
 
 cleanupPrevious()
 
+-- ==================== STARTUP LOADER ====================
+-- A small pre-flight window that works before the character/humanoid exists.
+-- It reports what the executor can do and waits for a character if needed.
+do
+    local parent
+    pcall(function() parent = gethui and gethui() end)
+    if not parent then
+        pcall(function() parent = game:GetService("CoreGui") end)
+    end
+    if not parent then
+        parent = PLAYER:FindFirstChild("PlayerGui")
+    end
+
+    if parent then
+        local old = parent:FindFirstChild("NexusTASLoader")
+        if old then old:Destroy() end
+
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "NexusTASLoader"
+        gui.IgnoreGuiInset = true
+        gui.ResetOnSpawn = false
+        gui.DisplayOrder = 999997
+        gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+        local frame = Instance.new("Frame")
+        frame.Size = UDim2.new(0, 560, 0, 300)
+        frame.Position = UDim2.new(0.5, 0, 0, 90)
+        frame.AnchorPoint = Vector2.new(0.5, 0)
+        frame.BackgroundColor3 = Color3.fromRGB(7, 18, 31)
+        frame.BackgroundTransparency = 0
+        frame.BorderSizePixel = 0
+        frame.Parent = gui
+
+        local stroke = Instance.new("UIStroke")
+        stroke.Color = Color3.fromRGB(62, 145, 215)
+        stroke.Thickness = 1
+        stroke.Transparency = 0.15
+        stroke.Parent = frame
+
+        local titleBar = Instance.new("Frame")
+        titleBar.Size = UDim2.new(1, 0, 0, 34)
+        titleBar.BackgroundColor3 = Color3.fromRGB(9, 30, 52)
+        titleBar.BorderSizePixel = 0
+        titleBar.Parent = frame
+
+        local title = Instance.new("TextLabel")
+        title.BackgroundTransparency = 1
+        title.Position = UDim2.new(0, 12, 0, 0)
+        title.Size = UDim2.new(1, -52, 1, 0)
+        title.Font = Enum.Font.GothamMedium
+        title.Text = "NexusTAS Loader V" .. tostring(VERSION)
+        title.TextColor3 = Color3.fromRGB(235, 245, 255)
+        title.TextSize = 16
+        title.TextXAlignment = Enum.TextXAlignment.Left
+        title.Parent = titleBar
+
+        local close = Instance.new("TextButton")
+        close.Size = UDim2.new(0, 22, 0, 22)
+        close.Position = UDim2.new(1, -32, 0, 6)
+        close.BackgroundColor3 = Color3.fromRGB(25, 86, 142)
+        close.BorderSizePixel = 0
+        close.Font = Enum.Font.GothamBold
+        close.Text = "X"
+        close.TextColor3 = Color3.fromRGB(235, 245, 255)
+        close.TextSize = 12
+        close.Parent = titleBar
+
+        local accent = Instance.new("Frame")
+        accent.Size = UDim2.new(1, 0, 0, 2)
+        accent.Position = UDim2.new(0, 0, 0, 34)
+        accent.BackgroundColor3 = Color3.fromRGB(62, 145, 215)
+        accent.BorderSizePixel = 0
+        accent.Parent = frame
+
+        local statusLabel = Instance.new("TextLabel")
+        statusLabel.BackgroundTransparency = 1
+        statusLabel.Position = UDim2.new(0, 16, 0, 44)
+        statusLabel.Size = UDim2.new(1, -32, 0, 20)
+        statusLabel.Font = Enum.Font.GothamMedium
+        statusLabel.Text = "Preparing..."
+        statusLabel.TextColor3 = Color3.fromRGB(235, 245, 255)
+        statusLabel.TextSize = 13
+        statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+        statusLabel.Parent = frame
+
+        local logLabel = Instance.new("TextLabel")
+        logLabel.BackgroundTransparency = 1
+        logLabel.Position = UDim2.new(0, 16, 0, 70)
+        logLabel.Size = UDim2.new(1, -32, 0, 160)
+        logLabel.Font = Enum.Font.Code
+        logLabel.Text = ""
+        logLabel.TextColor3 = Color3.fromRGB(160, 200, 225)
+        logLabel.TextSize = 11
+        logLabel.TextXAlignment = Enum.TextXAlignment.Left
+        logLabel.TextYAlignment = Enum.TextYAlignment.Top
+        logLabel.TextWrapped = true
+        logLabel.Parent = frame
+
+        local icon = Instance.new("Frame")
+        icon.Size = UDim2.new(0, 24, 0, 24)
+        icon.Position = UDim2.new(0, 16, 0, 260)
+        icon.BackgroundColor3 = Color3.fromRGB(88, 101, 242)
+        icon.BorderSizePixel = 0
+        icon.Parent = frame
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(1, 0)
+        corner.Parent = icon
+        local iconText = Instance.new("TextLabel")
+        iconText.BackgroundTransparency = 1
+        iconText.Size = UDim2.new(1, 0, 1, 0)
+        iconText.Font = Enum.Font.GothamBold
+        iconText.Text = "D"
+        iconText.TextColor3 = Color3.fromRGB(255, 255, 255)
+        iconText.TextSize = 14
+        iconText.Parent = icon
+
+        local join = Instance.new("TextButton")
+        join.Position = UDim2.new(0, 48, 0, 258)
+        join.Size = UDim2.new(0, 190, 0, 28)
+        join.BackgroundColor3 = Color3.fromRGB(88, 101, 242)
+        join.BorderSizePixel = 0
+        join.Font = Enum.Font.GothamMedium
+        join.Text = "Join to NexusTAS"
+        join.TextColor3 = Color3.fromRGB(255, 255, 255)
+        join.TextSize = 12
+        join.Parent = frame
+
+        local logs = {}
+        local loader = {}
+        function loader.log(text)
+            text = tostring(text)
+            statusLabel.Text = text
+            logs[#logs + 1] = text
+            if #logs > 9 then table.remove(logs, 1) end
+            logLabel.Text = table.concat(logs, "\n")
+        end
+        function loader.close()
+            if gui.Parent then gui:Destroy() end
+        end
+        GENV.__NexusLoader = loader
+
+        close.MouseButton1Click:Connect(loader.close)
+        join.MouseButton1Click:Connect(function()
+            local invite = GENV.__NexusDiscord
+            if type(invite) == "string" and invite ~= "" then
+                if type(setclipboard) == "function" then
+                    pcall(setclipboard, invite)
+                end
+                loader.log("Discord link copied to clipboard")
+            else
+                loader.log("Discord link is not configured yet")
+            end
+        end)
+
+        local executor = "?"
+        pcall(function()
+            local name, version = identifyexecutor()
+            executor = tostring(name) .. " " .. tostring(version)
+        end)
+        loader.log("Executor: " .. executor)
+        loader.log("Drawing: " .. ((Drawing and Drawing.new) and "ok" or "missing"))
+        loader.log("File API: " .. ((writefile and readfile and listfiles) and "ok" or "missing"))
+        loader.log("Character: waiting")
+        loader.log("Humanoid: waiting")
+        gui.Parent = parent
+    end
+end
+
 local RUN_ID = (_G.__NexusRunID or 0) + 1
 _G.__NexusRunID = RUN_ID
 local FORK_ID = 0
@@ -347,11 +515,36 @@ local function connect(signal, callback)
 end
 
 -- ==================== CHARACTER ====================
-local CHARACTER = PLAYER.Character or PLAYER.CharacterAdded:Wait()
+local CHARACTER = PLAYER.Character
+if not CHARACTER then
+    local deadline = os.clock() + 30
+    while not CHARACTER and os.clock() < deadline do
+        if GENV.__NexusLoader then
+            GENV.__NexusLoader.log("Waiting for character...")
+        end
+        task.wait(0.25)
+        CHARACTER = PLAYER.Character
+    end
+end
+if not CHARACTER then
+    if GENV.__NexusLoader then
+        GENV.__NexusLoader.log("No character found.")
+        GENV.__NexusLoader.log("Join a game and execute NexusTAS again.")
+    end
+    return
+end
+if GENV.__NexusLoader then GENV.__NexusLoader.log("Character: found") end
 local ROOT, HUMAN, ANIMATOR = resolveCharacter(CHARACTER)
 if not ROOT or not HUMAN then
     warn("[NexusTAS] Unsupported character (Humanoid or root part not found).")
+    if GENV.__NexusLoader then GENV.__NexusLoader.log("Humanoid: not found") end
     return
+end
+if GENV.__NexusLoader then
+    GENV.__NexusLoader.log("Humanoid: found")
+    local torso = CHARACTER:FindFirstChild("Torso")
+    local rig = (torso and torso:FindFirstChild("Right Shoulder")) and "R6" or "R15/custom"
+    GENV.__NexusLoader.log("Rig: " .. rig)
 end
 local ANIMATE_SCRIPT = CHARACTER:FindFirstChild("Animate")
 
@@ -1628,6 +1821,13 @@ local function enterCreate()
     paused = true
     lookAround = false
     cameraFollow = false
+    if #data == 0 then
+        local store = GENV.__NexusStore
+        if store then
+            store.loadedFPS = nil
+            store.currentRunKey = nil
+        end
+    end
     pcall(function() LockAnimations:Fire(true) end)
     pcall(function() LockShiftlock:Fire(false) end)
     if settings.ghostMode then
@@ -1906,10 +2106,18 @@ local function enterTest()
     end
     if ghost.active and exitGhost then exitGhost() end
     bindingControl = nil
-    if settings.safeTest then
-        startSafeTest()
+    local function start()
+        if settings.safeTest then
+            startSafeTest()
+        else
+            beginTestPlayback(false)
+        end
+    end
+    local store = GENV.__NexusStore
+    if store and store.checkFPS then
+        store.checkFPS(store.currentRunKey or "current", start)
     else
-        beginTestPlayback(false)
+        start()
     end
 end
 
@@ -1960,6 +2168,11 @@ local function deleteTAS()
         data = {}
         frame = 1
         lastPauseFrame = 1
+        local store = GENV.__NexusStore
+        if store then
+            store.loadedFPS = nil
+            store.currentRunKey = nil
+        end
         if mode == "create" then
             paused = true
             anchor(true)
@@ -2018,7 +2231,27 @@ end
 -- Flat files in the executor workspace: NexusTAS_run_*.json. No subfolders,
 -- because some Solara builds cannot create directories under their workspace.
 local FILE_PREFIX = "NexusTAS_"
-local MANIFEST = "NexusTAS_index.json"
+local LEGACY_MANIFEST = "NexusTAS_index.json"
+local STORE = GENV.__NexusStore
+if type(STORE) ~= "table" then
+    STORE = {
+        root = "NexusTAS",
+        runs = "NexusTAS/runs",
+        settingsFile = "NexusTAS/settings.json",
+        manifestFile = "NexusTAS/index.json",
+        legacyManifest = LEGACY_MANIFEST,
+        folder = "runs",
+        folders = { runs = true },
+        meta = {},
+        currentRunKey = nil,
+        loadedFPS = nil,
+        fpsEMA = 60,
+        fpsWarned = {},
+        settingsLoaded = false,
+    }
+    GENV.__NexusStore = STORE
+end
+local MANIFEST = STORE.manifestFile
 local savedRuns = {}
 local fileStorageUsable = nil
 local memorySaves = GENV.__NexusMemorySaves
@@ -2044,6 +2277,29 @@ local function fileExists(path)
     if type(isfile) ~= "function" then return false end
     local ok, result = pcall(isfile, path)
     return ok and result
+end
+
+function STORE.sanitize(value)
+    local text = tostring(value or "run")
+    text = text:gsub('[<>:"/\\|?*]', "_")
+    text = text:gsub("[\r\n\t]", " ")
+    text = text:gsub("%s+", " ")
+    text = text:gsub("^%s+", ""):gsub("%s+$", "")
+    if text == "" then text = "run" end
+    if #text > 64 then text = text:sub(1, 64) end
+    return text
+end
+
+function STORE.ensureFolders(base)
+    if not base then return end
+    if type(makefolder) ~= "function" then return end
+    pcall(makefolder, base .. STORE.root)
+    pcall(makefolder, base .. STORE.runs)
+    for folder in pairs(STORE.folders) do
+        if type(folder) == "string" and folder ~= "runs" and folder ~= "" then
+            pcall(makefolder, base .. STORE.runs .. "/" .. folder)
+        end
+    end
 end
 
 local function nameInUse(name)
@@ -2204,28 +2460,81 @@ local function mergeManifest()
     if not hasFileApi() or not HttpService then return end
     local base = resolveFileBase()
     if not base then return end
-    local okRead, raw = pcall(function() return readfile(base .. MANIFEST) end)
-    if not okRead or type(raw) ~= "string" or raw == "" then return end
-    local okJson, data = pcall(function() return HttpService:JSONDecode(raw) end)
-    if not okJson or type(data) ~= "table" then return end
-    for name, path in pairs(data) do
-        if type(name) == "string" and type(path) == "string" and not saveIndex[path] then
-            saveIndex[path] = name
+
+    local function apply(raw)
+        if type(raw) ~= "string" or raw == "" then return end
+        local ok, data = pcall(function() return HttpService:JSONDecode(raw) end)
+        if not ok or type(data) ~= "table" then return end
+        if type(data.folders) == "table" then
+            for _, folder in ipairs(data.folders) do
+                if type(folder) == "string" and folder ~= "" then
+                    STORE.folders[folder] = true
+                end
+            end
+        end
+        if type(data.runs) == "table" then
+            for path, meta in pairs(data.runs) do
+                if type(path) == "string" and type(meta) == "table" then
+                    STORE.meta[path] = meta
+                    if type(meta.name) == "string" then
+                        saveIndex[path] = meta.name
+                    end
+                end
+            end
+        else
+            for name, path in pairs(data) do
+                if type(name) == "string" and type(path) == "string" then
+                    saveIndex[path] = name
+                    STORE.meta[path] = STORE.meta[path] or { name = name, folder = "runs" }
+                end
+            end
         end
     end
+
+    local okNew, rawNew = pcall(function() return readfile(base .. MANIFEST) end)
+    if okNew then apply(rawNew) end
+    local okOld, rawOld = pcall(function() return readfile(base .. LEGACY_MANIFEST) end)
+    if okOld then apply(rawOld) end
+    STORE.folders.runs = true
 end
 
 local function writeManifest()
     if not hasFileApi() or not HttpService then return end
     local base = resolveFileBase()
     if not base then return end
-    local data = {}
-    for path, name in pairs(saveIndex) do
-        if type(path) == "string" and type(name) == "string" then
-            data[name] = path
+    if type(makefolder) == "function" then
+        pcall(makefolder, base .. STORE.root)
+    end
+
+    local folders = {}
+    for folder in pairs(STORE.folders) do
+        if type(folder) == "string" and folder ~= "" then
+            folders[#folders + 1] = folder
         end
     end
-    local okJson, json = pcall(function() return HttpService:JSONEncode(data) end)
+    table.sort(folders)
+
+    local runs = {}
+    for path, meta in pairs(STORE.meta) do
+        if type(path) == "string" and type(meta) == "table" and path:sub(1, 4) ~= "mem:" then
+            runs[path] = {
+                name = meta.name or saveIndex[path] or path,
+                folder = meta.folder or "runs",
+                fps = meta.fps,
+                frames = meta.frames,
+                savedAt = meta.savedAt,
+            }
+        end
+    end
+    for path, name in pairs(saveIndex) do
+        if type(path) == "string" and type(name) == "string"
+            and path:sub(1, 4) ~= "mem:" and not runs[path] then
+            runs[path] = { name = name, folder = "runs" }
+        end
+    end
+
+    local payload = { version = 2, folders = folders, runs = runs }
+    local okJson, json = pcall(function() return HttpService:JSONEncode(payload) end)
     if not okJson then return end
     pcall(function() writefile(base .. MANIFEST, json) end)
 end
@@ -2332,59 +2641,100 @@ end
 
 local function refreshSavedRuns()
     savedRuns = {}
+    local seenPaths = {}
     local seenNames = {}
 
     mergeManifest()
+
+    local function addRun(path, name, folder, meta)
+        if type(path) ~= "string" or path == "" or seenPaths[path] then return end
+        seenPaths[path] = true
+        local m = meta or STORE.meta[path] or {}
+        local resolvedName = name or m.name or path
+        local resolvedFolder = folder or m.folder or "runs"
+        local key = tostring(resolvedName) .. "|" .. tostring(resolvedFolder)
+        if seenNames[key] then return end
+        seenNames[key] = true
+        savedRuns[#savedRuns + 1] = {
+            path = path,
+            name = resolvedName,
+            folder = resolvedFolder,
+            fps = m.fps,
+            frames = m.frames,
+            savedAt = m.savedAt,
+        }
+    end
+
     for path, name in pairs(saveIndex) do
-        if type(path) == "string" and type(name) == "string" and not seenNames[name] then
-            seenNames[name] = true
-            savedRuns[#savedRuns + 1] = { path = path, name = name }
+        if type(path) == "string" and type(name) == "string" then
+            addRun(path, name, STORE.meta[path] and STORE.meta[path].folder, STORE.meta[path])
         end
     end
 
     if hasFileApi() then
         local base = resolveFileBase()
-        if not base then fileStorageUsable = false end
         if base then
-            local function addFiles(files, prefix)
-                if type(files) ~= "table" then return end
+            fileStorageUsable = true
+            local function fullPath(entry, rel)
+                if type(entry) ~= "string" then return nil end
+                if entry:find("[/\\]") then return entry end
+                return base .. rel .. entry
+            end
+            local function scan(rel, folder, legacyOnly)
+                local ok, files = pcall(function() return listfiles(base .. rel) end)
+                if not ok or type(files) ~= "table" then return end
                 for _, entry in ipairs(files) do
                     if type(entry) == "string" then
                         local baseName = entry:match("([^/\\]+)$") or entry
-                        if baseName:sub(1, #FILE_PREFIX) == FILE_PREFIX
-                            and baseName:sub(-5) == ".json" then
-                            local name = baseName:sub(#FILE_PREFIX + 1, -6)
-                            if name:sub(1, 4) == "run_" and not seenNames[name] then
-                                local path = entry
-                                if not path:find("[/\\]") and prefix ~= "" then
-                                    path = prefix .. path
-                                end
-                                seenNames[name] = true
-                                savedRuns[#savedRuns + 1] = { path = path, name = name }
+                        if baseName:sub(-5) == ".json" then
+                            if legacyOnly and baseName:sub(1, #FILE_PREFIX) ~= FILE_PREFIX then
+                                continue
                             end
+                            if baseName == "index.json" or baseName == "settings.json" then
+                                continue
+                            end
+                            local name = baseName:sub(1, -6)
+                            if name:sub(1, #FILE_PREFIX) == FILE_PREFIX then
+                                name = name:sub(#FILE_PREFIX + 1)
+                            end
+                            addRun(fullPath(entry, rel), name, folder)
                         end
                     end
                 end
             end
-
-            local ok, files = pcall(function() return listfiles(base) end)
-            if ok then addFiles(files, base) end
-            local trimmed = base:gsub("/+$", "")
-            if trimmed ~= base then
-                ok, files = pcall(function() return listfiles(trimmed) end)
-                if ok then addFiles(files, base) end
+            for folder in pairs(STORE.folders) do
+                if type(folder) == "string" and folder ~= "" then
+                    local rel = STORE.runs .. "/"
+                    if folder ~= "runs" then rel = rel .. folder .. "/" end
+                    scan(rel, folder, false)
+                end
             end
+            local okDirs, dirs = pcall(function() return listfiles(base .. STORE.runs) end)
+            if okDirs and type(dirs) == "table" then
+                for _, entry in ipairs(dirs) do
+                    if type(entry) == "string" then
+                        local name = entry:match("([^/\\]+)$") or entry
+                        if name ~= "" and name:sub(-5) ~= ".json" then
+                            STORE.folders[name] = true
+                        end
+                    end
+                end
+            end
+            scan("", "runs", true)
+        else
+            fileStorageUsable = false
         end
     end
 
     for name, content in pairs(memorySaves) do
-        if type(name) == "string" and type(content) == "string" and not seenNames[name] then
-            seenNames[name] = true
-            savedRuns[#savedRuns + 1] = { path = "mem:" .. name, name = name }
+        if type(name) == "string" and type(content) == "string" then
+            addRun("mem:" .. name, name, "runs")
         end
     end
 
-    table.sort(savedRuns, function(a, b) return a.name > b.name end)
+    table.sort(savedRuns, function(a, b)
+        return (a.savedAt or a.name) > (b.savedAt or b.name)
+    end)
 end
 
 local function makeRunPayload()
@@ -2397,13 +2747,22 @@ local function makeRunPayload()
     end)
     if not stamp then stamp = tostring(math.floor(tick())) end
 
+    local total = 0
+    for _, f in ipairs(data) do
+        total += f.dt or 0
+    end
+    local fps = total > 0 and math.floor(#data / total + 0.5) or math.floor(STORE.fpsEMA + 0.5)
+    fps = math.clamp(fps, 1, 1000)
+
     local frames = {}
     for i, f in ipairs(data) do frames[i] = encodeFrame(f) end
     return {
-        format = 1,
+        format = 2,
         version = VERSION,
         savedAt = stamp,
         frameCount = #data,
+        fps = fps,
+        folder = STORE.folder,
         frames = frames,
     }, stamp
 end
@@ -2415,13 +2774,16 @@ local function saveCurrentRun()
         return
     end
 
+    local folder = STORE.folder or "runs"
+    if folder == "" then folder = "runs" end
+    STORE.folders[folder] = true
+
     local base = "run_" .. stamp
     local fileBasePath = hasFileApi() and resolveFileBase() or nil
-    local saveName = base
+    local saveName = STORE.sanitize(base)
     local suffix = 2
-    while nameInUse(saveName)
-        or (fileBasePath and fileExists(fileBasePath .. FILE_PREFIX .. saveName .. ".json")) do
-        saveName = base .. "_" .. suffix
+    while nameInUse(saveName) do
+        saveName = STORE.sanitize(base .. "_" .. suffix)
         suffix += 1
     end
 
@@ -2431,20 +2793,40 @@ local function saveCurrentRun()
         return
     end
 
-    -- Keep a session copy as a load fallback even when the file write works.
     memorySaves[saveName] = json
+    local memoryPath = "mem:" .. saveName
+    saveIndex[memoryPath] = saveName
+    STORE.meta[memoryPath] = {
+        name = saveName,
+        folder = folder,
+        fps = payload.fps,
+        frames = #data,
+        savedAt = stamp,
+    }
 
     local savedToFile = false
     local savedPath = nil
     local writeError = nil
     if fileBasePath then
-        local path = fileBasePath .. FILE_PREFIX .. saveName .. ".json"
+        STORE.ensureFolders(fileBasePath)
+        local folderPart = (folder ~= "runs") and (folder .. "/") or ""
+        local relative = STORE.runs .. "/" .. folderPart .. FILE_PREFIX .. saveName .. ".json"
+        local path = fileBasePath .. relative
         savedPath = path
         local okWrite, err = pcall(function() writefile(path, json) end)
         if okWrite then
             savedToFile = true
             fileStorageUsable = true
             saveIndex[path] = saveName
+            STORE.meta[path] = {
+                name = saveName,
+                folder = folder,
+                fps = payload.fps,
+                frames = #data,
+                savedAt = stamp,
+            }
+            STORE.currentRunKey = path
+            STORE.loadedFPS = payload.fps
             GENV.__NexusLastSave = { path = path, json = json }
             writeManifest()
             task.delay(1, function() writeManifest() end)
@@ -2458,6 +2840,11 @@ local function saveCurrentRun()
         warn("[NexusTAS] File save unavailable, using session storage: " .. tostring(writeError))
     end
 
+    if savedToFile then
+        saveIndex[memoryPath] = nil
+        STORE.meta[memoryPath] = nil
+    end
+
     if savedToFile and savedPath and type(isfile) == "function" then
         task.delay(2, function()
             local ok, exists = pcall(isfile, savedPath)
@@ -2469,8 +2856,9 @@ local function saveCurrentRun()
     end
 
     refreshSavedRuns()
-    setStatus(string.format("Saved run (%d frames)", #data))
-    popup(savedToFile and "Run saved" or "Run saved (session)", 2)
+    local fpsText = tostring(payload.fps or "?")
+    setStatus(string.format("Saved run (%d frames, %s FPS)", #data, fpsText))
+    popup(savedToFile and ("Run saved (" .. fpsText .. " FPS)") or "Run saved (session)", 2)
 end
 
 local function loadRunFromString(raw)
@@ -2494,8 +2882,9 @@ local function loadRunFromString(raw)
     frame = 1
     lastPauseFrame = 1
     recomputeTimes()
+    STORE.loadedFPS = tonumber(payload.fps)
     setStatus(string.format("Loaded run (%d frames)", #frames))
-    return true
+    return true, payload
 end
 
 local function loadSavedRun(path)
@@ -2527,11 +2916,13 @@ local function loadSavedRun(path)
         return
     end
 
-    local ok, err = loadRunFromString(raw)
+    local ok, payloadOrError = loadRunFromString(raw)
     if ok then
+        STORE.currentRunKey = path
+        STORE.loadedFPS = tonumber(payloadOrError and payloadOrError.fps) or STORE.loadedFPS
         popup("Run loaded", 2)
     else
-        popup(err, 3)
+        popup(payloadOrError, 3)
     end
 end
 
@@ -2606,8 +2997,8 @@ local function openImportBox()
     gui.Parent = parent
 
     local box = Instance.new("TextBox")
-    box.Size = UDim2.fromScale(0.6, 0.32)
-    box.Position = UDim2.fromScale(0.2, 0.34)
+    box.Size = UDim2.new(0.6, 0, 0.32, 0)
+    box.Position = UDim2.new(0.2, 0, 0.34, 0)
     box.BackgroundColor3 = Color3.fromRGB(10, 20, 30)
     box.TextColor3 = Color3.fromRGB(235, 245, 250)
     box.BorderSizePixel = 0
@@ -2630,6 +3021,7 @@ end
 local function deleteSavedRun(path)
     if path:sub(1, 4) == "mem:" then
         memorySaves[path:sub(5)] = nil
+        STORE.meta[path] = nil
     else
         if type(delfile) ~= "function" then
             popup("File API unavailable", 3)
@@ -2648,15 +3040,396 @@ local function deleteSavedRun(path)
             end
         end
         saveIndex[path] = nil
+        STORE.meta[path] = nil
         if name then memorySaves[name] = nil end
+        if STORE.currentRunKey == path then STORE.currentRunKey = nil end
         writeManifest()
     end
     refreshSavedRuns()
     popup("Run deleted", 2)
 end
 
-if _G.__NexusDebug then
-    _G.__NexusDebug.saveRun = function() saveCurrentRun() end
+function STORE.uiParent()
+    local parent
+    pcall(function() parent = gethui and gethui() end)
+    if not parent then
+        pcall(function() parent = game:GetService("CoreGui") end)
+    end
+    if not parent then
+        parent = PLAYER:FindFirstChild("PlayerGui")
+    end
+    return parent
+end
+
+function STORE.prompt(title, defaultText, callback)
+    local parent = STORE.uiParent()
+    if not parent then return end
+    local old = parent:FindFirstChild("NexusTASPrompt")
+    if old then old:Destroy() end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "NexusTASPrompt"
+    gui.IgnoreGuiInset = true
+    gui.ResetOnSpawn = false
+    gui.DisplayOrder = 999998
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 460, 0, 150)
+    frame.Position = UDim2.new(0.5, 0, 0.5, -75)
+    frame.AnchorPoint = Vector2.new(0.5, 0.5)
+    frame.BackgroundColor3 = Color3.fromRGB(7, 18, 31)
+    frame.BackgroundTransparency = 0
+    frame.BorderSizePixel = 0
+    frame.Parent = gui
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(62, 145, 215)
+    stroke.Thickness = 1
+    stroke.Transparency = 0.15
+    stroke.Parent = frame
+
+    local titleBar = Instance.new("Frame")
+    titleBar.Size = UDim2.new(1, 0, 0, 32)
+    titleBar.BackgroundColor3 = Color3.fromRGB(9, 30, 52)
+    titleBar.BorderSizePixel = 0
+    titleBar.Parent = frame
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Position = UDim2.new(0, 12, 0, 0)
+    titleLabel.Size = UDim2.new(1, -24, 1, 0)
+    titleLabel.Font = Enum.Font.GothamMedium
+    titleLabel.Text = tostring(title or "NexusTAS")
+    titleLabel.TextColor3 = Color3.fromRGB(235, 245, 255)
+    titleLabel.TextSize = 15
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.Parent = titleBar
+
+    local box = Instance.new("TextBox")
+    box.Position = UDim2.new(0, 16, 0, 48)
+    box.Size = UDim2.new(1, -32, 0, 30)
+    box.BackgroundColor3 = Color3.fromRGB(13, 40, 65)
+    box.BorderSizePixel = 0
+    box.Font = Enum.Font.Code
+    box.TextColor3 = Color3.fromRGB(235, 245, 255)
+    box.TextSize = 14
+    box.Text = tostring(defaultText or "")
+    box.ClearTextOnFocus = false
+    box.Parent = frame
+
+    local function finish(value)
+        gui:Destroy()
+        if value ~= nil and callback then callback(value) end
+    end
+
+    local okButton = Instance.new("TextButton")
+    okButton.Position = UDim2.new(1, -196, 0, 94)
+    okButton.Size = UDim2.new(0, 90, 0, 26)
+    okButton.BackgroundColor3 = Color3.fromRGB(25, 86, 142)
+    okButton.BorderSizePixel = 0
+    okButton.Font = Enum.Font.GothamMedium
+    okButton.Text = "OK"
+    okButton.TextColor3 = Color3.fromRGB(235, 245, 255)
+    okButton.TextSize = 12
+    okButton.Parent = frame
+    okButton.MouseButton1Click:Connect(function() finish(box.Text) end)
+
+    local cancel = okButton:Clone()
+    cancel.Position = UDim2.new(1, -102, 0, 94)
+    cancel.BackgroundColor3 = Color3.fromRGB(13, 40, 65)
+    cancel.Text = "Cancel"
+    cancel.Parent = frame
+    cancel.MouseButton1Click:Connect(function() finish(nil) end)
+
+    box.FocusLost:Connect(function(enter)
+        if enter then finish(box.Text) end
+    end)
+
+    gui.Parent = parent
+    pcall(function() box:CaptureFocus() end)
+end
+
+function STORE.createFolder(name)
+    local folder = STORE.sanitize(name)
+    if folder == "" then return end
+    STORE.folders[folder] = true
+    STORE.folder = folder
+    local base = hasFileApi() and resolveFileBase() or nil
+    if base then
+        STORE.ensureFolders(base)
+        pcall(makefolder, base .. STORE.runs .. "/" .. folder)
+    end
+    writeManifest()
+    refreshSavedRuns()
+    STORE.saveSettings()
+    popup("Folder: " .. folder, 2)
+end
+
+function STORE.renameRun(path, newName)
+    local clean = STORE.sanitize(newName)
+    if clean == "" then return end
+
+    if path:sub(1, 4) == "mem:" then
+        local oldName = path:sub(5)
+        local raw = memorySaves[oldName]
+        if type(raw) ~= "string" then return end
+        memorySaves[oldName] = nil
+        memorySaves[clean] = raw
+        saveIndex[path] = clean
+        STORE.meta[path] = STORE.meta[path] or { folder = "runs" }
+        STORE.meta[path].name = clean
+        writeManifest()
+        refreshSavedRuns()
+        popup("Run renamed", 2)
+        return
+    end
+
+    local raw
+    local okRead = pcall(function() raw = readfile(path) end)
+    if not okRead or type(raw) ~= "string" then
+        popup("Could not read run", 3)
+        return
+    end
+
+    local base = hasFileApi() and resolveFileBase() or nil
+    if not base then
+        popup("File API unavailable", 3)
+        return
+    end
+
+    local meta = STORE.meta[path] or {}
+    local folder = meta.folder or "runs"
+    local folderPart = (folder ~= "runs") and (folder .. "/") or ""
+    local newPath = base .. STORE.runs .. "/" .. folderPart .. FILE_PREFIX .. clean .. ".json"
+    if newPath ~= path and fileExists(newPath) then
+        popup("Name already exists", 3)
+        return
+    end
+    local okWrite = pcall(function() writefile(newPath, raw) end)
+    if not okWrite then
+        popup("Rename failed", 3)
+        return
+    end
+    pcall(delfile, path)
+
+    local oldName = saveIndex[path] or meta.name
+    saveIndex[path] = nil
+    STORE.meta[path] = nil
+    if oldName then memorySaves[oldName] = nil end
+    saveIndex[newPath] = clean
+    STORE.meta[newPath] = {
+        name = clean,
+        folder = folder,
+        fps = meta.fps,
+        frames = meta.frames,
+        savedAt = meta.savedAt,
+    }
+    memorySaves[clean] = raw
+    if STORE.currentRunKey == path then STORE.currentRunKey = newPath end
+
+    writeManifest()
+    refreshSavedRuns()
+    popup("Run renamed", 2)
+end
+
+function STORE.saveSettings()
+    local payload = { version = 1, folder = STORE.folder, settings = {}, controls = {} }
+    for key, value in pairs(settings) do
+        local valueType = type(value)
+        if valueType == "boolean" or valueType == "number" or valueType == "string" then
+            payload.settings[key] = value
+        end
+    end
+    for key, value in pairs(CONTROLS) do
+        if typeof(value) == "EnumItem" then
+            payload.controls[key] = { enum = tostring(value.EnumType), name = value.Name }
+        end
+    end
+
+    local base = hasFileApi() and resolveFileBase() or nil
+    if base and HttpService then
+        STORE.ensureFolders(base)
+        local ok, json = pcall(function() return HttpService:JSONEncode(payload) end)
+        if ok then
+            pcall(function() writefile(base .. STORE.settingsFile, json) end)
+        end
+    end
+    GENV.__NexusSettings = payload
+end
+
+function STORE.loadSettings()
+    local payload = GENV.__NexusSettings
+    local base = hasFileApi() and resolveFileBase() or nil
+    if base and HttpService then
+        local ok, raw = pcall(function() return readfile(base .. STORE.settingsFile) end)
+        if ok and type(raw) == "string" and raw ~= "" then
+            local okJson, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
+            if okJson and type(decoded) == "table" then payload = decoded end
+        end
+    end
+    if type(payload) ~= "table" then return false end
+
+    if type(payload.folder) == "string" and payload.folder ~= "" then
+        STORE.folders[payload.folder] = true
+        STORE.folder = payload.folder
+    end
+    if type(payload.settings) == "table" then
+        for key, value in pairs(payload.settings) do
+            if settings[key] ~= nil and type(settings[key]) == type(value) then
+                settings[key] = value
+            end
+        end
+    end
+    if type(payload.controls) == "table" then
+        for key, entry in pairs(payload.controls) do
+            if CONTROLS[key] ~= nil and type(entry) == "table" and type(entry.name) == "string" then
+                local value
+                if entry.enum == "Enum.KeyCode" then
+                    value = Enum.KeyCode[entry.name]
+                elseif entry.enum == "Enum.UserInputType" then
+                    value = Enum.UserInputType[entry.name]
+                end
+                if value then CONTROLS[key] = value end
+            end
+        end
+    end
+    STORE.settingsLoaded = true
+    GENV.__NexusSettings = payload
+    return true
+end
+
+function STORE.checkFPS(runKey, callback)
+    local finished = false
+    local function finish(change)
+        if finished then return end
+        finished = true
+        if change then
+            local target = tonumber(STORE.loadedFPS)
+            if target and type(setfpscap) == "function" then
+                pcall(setfpscap, target)
+            elseif target then
+                popup("Executor cannot change FPS cap", 3)
+            end
+        end
+        if callback then callback() end
+    end
+
+    local target = tonumber(STORE.loadedFPS)
+    if not target or target <= 0 then
+        finish(false)
+        return
+    end
+    runKey = tostring(runKey or "current")
+    if STORE.fpsWarned[runKey] then
+        finish(false)
+        return
+    end
+
+    local current = math.floor((STORE.fpsEMA or 60) + 0.5)
+    if math.abs(current - target) <= 2 then
+        finish(false)
+        return
+    end
+    STORE.fpsWarned[runKey] = true
+
+    local parent = STORE.uiParent()
+    if not parent then
+        finish(false)
+        return
+    end
+    local old = parent:FindFirstChild("NexusTASFPS")
+    if old then old:Destroy() end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "NexusTASFPS"
+    gui.IgnoreGuiInset = true
+    gui.ResetOnSpawn = false
+    gui.DisplayOrder = 999998
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 500, 0, 190)
+    frame.Position = UDim2.new(0.5, 0, 0.5, -95)
+    frame.AnchorPoint = Vector2.new(0.5, 0.5)
+    frame.BackgroundColor3 = Color3.fromRGB(7, 18, 31)
+    frame.BackgroundTransparency = 0
+    frame.BorderSizePixel = 0
+    frame.Parent = gui
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(62, 145, 215)
+    stroke.Thickness = 1
+    stroke.Transparency = 0.15
+    stroke.Parent = frame
+
+    local titleBar = Instance.new("Frame")
+    titleBar.Size = UDim2.new(1, 0, 0, 32)
+    titleBar.BackgroundColor3 = Color3.fromRGB(9, 30, 52)
+    titleBar.BorderSizePixel = 0
+    titleBar.Parent = frame
+
+    local title = Instance.new("TextLabel")
+    title.BackgroundTransparency = 1
+    title.Position = UDim2.new(0, 12, 0, 0)
+    title.Size = UDim2.new(1, -24, 1, 0)
+    title.Font = Enum.Font.GothamMedium
+    title.Text = "FPS Mismatch"
+    title.TextColor3 = Color3.fromRGB(235, 245, 255)
+    title.TextSize = 15
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = titleBar
+
+    local function addLine(text, y, size, color, font)
+        local label = Instance.new("TextLabel")
+        label.BackgroundTransparency = 1
+        label.Position = UDim2.fromOffset(16, y)
+        label.Size = UDim2.new(1, -32, 0, size + 8)
+        label.Font = font or Enum.Font.Gotham
+        label.Text = text
+        label.TextColor3 = color
+        label.TextSize = size
+        label.TextWrapped = true
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Parent = frame
+        return label
+    end
+
+    addLine(string.format("This run was recorded at %d FPS.", target), 42, 13,
+        Color3.fromRGB(235, 245, 255), Enum.Font.GothamMedium)
+    addLine(string.format("Current FPS: %d.", current), 66, 12,
+        Color3.fromRGB(190, 215, 235))
+    addLine(string.format("Change the FPS cap to %d for this run?", target), 90, 12,
+        Color3.fromRGB(150, 190, 220))
+
+    local function button(text, x, color, onClick)
+        local btn = Instance.new("TextButton")
+        btn.Position = UDim2.new(1, x, 0, 140)
+        btn.Size = UDim2.new(0, 100, 0, 28)
+        btn.BackgroundColor3 = color
+        btn.BorderSizePixel = 0
+        btn.Font = Enum.Font.GothamMedium
+        btn.Text = text
+        btn.TextColor3 = Color3.fromRGB(235, 245, 255)
+        btn.TextSize = 12
+        btn.Parent = frame
+        btn.MouseButton1Click:Connect(onClick)
+        return btn
+    end
+
+    button("Dismiss", -224, Color3.fromRGB(13, 40, 65), function()
+        gui:Destroy()
+        finish(false)
+    end)
+    button("Yes", -116, Color3.fromRGB(25, 86, 142), function()
+        gui:Destroy()
+        finish(true)
+    end)
+
+    gui.Parent = parent
+end
+
+if _G.__NexusDebug then    _G.__NexusDebug.saveRun = function() saveCurrentRun() end
     _G.__NexusDebug.loadRun = function(path) loadSavedRun(path) end
     _G.__NexusDebug.runs = function()
         refreshSavedRuns()
@@ -2893,6 +3666,10 @@ connect(RunService.Heartbeat, function(dt)
             updateTest()
         end
     end
+    if dt and dt > 0 then
+        local instant = 1 / dt
+        STORE.fpsEMA = math.clamp((STORE.fpsEMA or 60) * 0.9 + instant * 0.1, 1, 1000)
+    end
     lastFrameTime = dt
 end)
 
@@ -2936,6 +3713,7 @@ connect(UIS.InputBegan, function(inp, processed)
         end
         if captured then
             CONTROLS[bindingControl] = captured
+            if STORE and STORE.saveSettings then STORE.saveSettings() end
             if captured == Enum.KeyCode.M and bindingControl ~= "Menu" then
                 popup("M is reserved for the Main Menu", 3)
             end
@@ -3758,6 +4536,7 @@ local function buildMenuPrimitives()
         drawButton("controls_reset", cx, resetY, cw, 20, "Reset to Defaults", function()
             for k, v in pairs(DEFAULT_CONTROLS) do CONTROLS[k] = v end
             bindingControl = nil
+            if STORE and STORE.saveSettings then STORE.saveSettings() end
         end)
     elseif drawTab == "settings" then
         local rows = {
@@ -3774,6 +4553,7 @@ local function buildMenuPrimitives()
             local key, label = row[1], row[2]
             drawToggle("set_" .. key, cx, y2, cw, 24, label, settings[key], function()
                 settings[key] = not settings[key]
+                if STORE and STORE.saveSettings then STORE.saveSettings() end
                 if key == "ghostMode" then
                     if settings.ghostMode then
                         if mode == "create" and enterGhost then
@@ -3794,9 +4574,11 @@ local function buildMenuPrimitives()
         local plusX = cx + cw - 34
         drawButton("speed_minus", minusX, y2 + 3, 24, 18, "-", function()
             settings.playbackSpeed = math.clamp(round(settings.playbackSpeed - 0.25, 100), 0.1, 4)
+            if STORE and STORE.saveSettings then STORE.saveSettings() end
         end)
         drawButton("speed_plus", plusX, y2 + 3, 24, 18, "+", function()
             settings.playbackSpeed = math.clamp(round(settings.playbackSpeed + 0.25, 100), 0.1, 4)
+            if STORE and STORE.saveSettings then STORE.saveSettings() end
         end)
         txt(minusX + 27, y2 + 6, 11, string.format("%.2f", settings.playbackSpeed),
             COL.text, Drawing.Fonts.Monospace, 0, 21, false, true)
@@ -3804,55 +4586,107 @@ local function buildMenuPrimitives()
         local basePath = fileBase
         local fileMode = hasFileApi() and fileStorageUsable ~= false
             and basePath ~= nil and basePath ~= false
-        drawButton("save_run", cx, cy, 180, 24, "Save Current Run", function()
+        local folder = STORE.folder or "runs"
+        STORE.folders[folder] = true
+
+        drawButton("save_run", cx, cy, 170, 24, "Save Current Run", function()
             saveCurrentRun()
         end)
-        drawButton("refresh_runs", cx + 190, cy, 90, 24, "Refresh", function()
+        drawButton("new_folder", cx + 178, cy, 108, 24, "New Folder", function()
+            STORE.prompt("New folder", "My Game", function(text)
+                STORE.createFolder(text)
+            end)
+        end)
+        drawButton("refresh_runs", cx + 294, cy, 80, 24, "Refresh", function()
             refreshSavedRuns()
         end)
+
+        local folders = {}
+        for name in pairs(STORE.folders) do
+            if type(name) == "string" and name ~= "" then
+                folders[#folders + 1] = name
+            end
+        end
+        table.sort(folders)
+        local folderIndex = 1
+        for i, name in ipairs(folders) do
+            if name == folder then folderIndex = i end
+        end
+        drawButton("folder_prev", cx, cy + 30, 24, 20, "<", function()
+            if #folders > 1 then
+                folderIndex = folderIndex - 1
+                if folderIndex < 1 then folderIndex = #folders end
+                STORE.folder = folders[folderIndex]
+                STORE.saveSettings()
+            end
+        end)
+        drawButton("folder_next", cx + cw - 24, cy + 30, 24, 20, ">", function()
+            if #folders > 1 then
+                folderIndex = folderIndex + 1
+                if folderIndex > #folders then folderIndex = 1 end
+                STORE.folder = folders[folderIndex]
+                STORE.saveSettings()
+            end
+        end)
+        txt(cx + 32, cy + 35, 11, "Folder: " .. folder,
+            COL.text, Drawing.Fonts.Monospace, 0, 21, false, true)
+
         local storageLabel
         if fileMode then
-            storageLabel = basePath == ""
-                and "Files: workspace root"
-                or ("Files: " .. basePath)
-            if #storageLabel > 48 then storageLabel = storageLabel:sub(1, 45) .. "..." end
+            storageLabel = "Path: " .. tostring(basePath) .. STORE.root
+            if #storageLabel > 66 then storageLabel = storageLabel:sub(1, 63) .. "..." end
         else
             storageLabel = hasFileApi() and basePath == nil
                 and "Checking storage..."
                 or "Session storage (no persistent path)"
         end
-        txt(cx, cy + 30, 10, storageLabel,
+        txt(cx, cy + 55, 9, storageLabel,
             fileMode and COL.subtext or COL.danger,
             Drawing.Fonts.UI, 0, 21, false, true)
 
-        drawButton("export_run", cx, cy + 46, 150, 20, "Export Clipboard", function()
+        drawButton("export_run", cx, cy + 72, 150, 20, "Export Clipboard", function()
             exportRunToClipboard()
         end)
-        drawButton("import_run", cx + 160, cy + 46, 150, 20, "Import Clipboard", function()
+        drawButton("import_run", cx + 160, cy + 72, 150, 20, "Import Clipboard", function()
             openImportBox()
         end)
 
-        local ry = cy + 76
-        if #savedRuns == 0 then
-            txt(cx + 2, ry, 11, "No saved runs.",
+        local list = {}
+        for _, run in ipairs(savedRuns) do
+            if run.folder == folder then list[#list + 1] = run end
+        end
+
+        local ry = cy + 100
+        if #list == 0 then
+            txt(cx + 2, ry, 11, "No saved runs in this folder.",
                 COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
         else
-            local maxRows = 12
-            for i = 1, math.min(#savedRuns, maxRows) do
-                local run = savedRuns[i]
+            local maxRows = 9
+            for i = 1, math.min(#list, maxRows) do
+                local run = list[i]
                 sq(cx, ry, cw, 22, (i % 2 == 0) and COL.rowAlt or COL.row, 0.1, 12, true)
-                txt(cx + 8, ry + 5, 10, run.name,
+                local label = run.name
+                if #label > 30 then label = label:sub(1, 27) .. "..." end
+                txt(cx + 8, ry + 5, 10, label,
                     COL.text, Drawing.Fonts.Monospace, 0, 21, false, true)
-                drawButton("load_run_" .. i, cx + cw - 124, ry + 2, 62, 18, "Load", function()
+                local fpsText = run.fps and (tostring(run.fps) .. " FPS") or "? FPS"
+                txt(cx + cw - 250, ry + 5, 9, fpsText,
+                    COL.subtext, Drawing.Fonts.Monospace, 0, 21, false, true)
+                drawButton("load_run_" .. i, cx + cw - 126, ry + 2, 54, 18, "Load", function()
                     loadSavedRun(run.path)
                 end)
-                drawButton("del_run_" .. i, cx + cw - 58, ry + 2, 54, 18, "Del", function()
+                drawButton("ren_run_" .. i, cx + cw - 68, ry + 2, 30, 18, "Ren", function()
+                    STORE.prompt("Rename run", run.name, function(text)
+                        STORE.renameRun(run.path, text)
+                    end)
+                end)
+                drawButton("del_run_" .. i, cx + cw - 34, ry + 2, 30, 18, "Del", function()
                     deleteSavedRun(run.path)
                 end)
                 ry += 25
             end
-            if #savedRuns > maxRows then
-                txt(cx + 2, ry, 10, "+" .. (#savedRuns - maxRows) .. " more",
+            if #list > maxRows then
+                txt(cx + 2, ry, 10, "+" .. (#list - maxRows) .. " more",
                     COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
             end
         end
@@ -4225,6 +5059,25 @@ function drawShutdown()
 end
 
 end
+
+task.spawn(function()
+    local ok = false
+    if STORE and STORE.loadSettings then
+        ok = STORE.loadSettings()
+    end
+    local base = hasFileApi() and resolveFileBase() or nil
+    if GENV.__NexusLoader then
+        GENV.__NexusLoader.log("Settings: " .. (ok and "loaded" or "defaults"))
+        GENV.__NexusLoader.log("Storage: " .. (base and (base .. STORE.root) or "session only"))
+        GENV.__NexusLoader.log("Status: ready")
+        task.delay(2.5, function()
+            if GENV.__NexusLoader and GENV.__NexusLoader.close then
+                GENV.__NexusLoader.close()
+            end
+        end)
+    end
+end)
+
 setupGui()
 
 -- ==================== START ====================
@@ -4257,6 +5110,7 @@ _G.__NexusShutdown = function()
         end
     end
     if writeManifest then pcall(writeManifest) end
+    if STORE and STORE.saveSettings then pcall(STORE.saveSettings) end
 
     for _, conn in ipairs(CONNECTIONS) do
         pcall(function() conn:Disconnect() end)
