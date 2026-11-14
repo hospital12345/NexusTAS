@@ -338,6 +338,36 @@ cleanupPrevious()
 -- A small pre-flight window that works before the character/humanoid exists.
 -- It reports what the executor can do and waits for a character if needed.
 do
+    local showLoader = true
+    local cached = GENV.__NexusSettings
+    if type(cached) == "table" and type(cached.settings) == "table"
+        and cached.settings.showLoader == false then
+        showLoader = false
+    end
+    if showLoader and type(readfile) == "function" and HttpService then
+        local candidates = {
+            "NexusTAS/settings.json",
+            "workspace/NexusTAS/settings.json",
+            "./NexusTAS/settings.json",
+        }
+        for _, path in ipairs(candidates) do
+            local ok, raw = pcall(function() return readfile(path) end)
+            if ok and type(raw) == "string" and raw ~= "" then
+                local okJson, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
+                if okJson and type(decoded) == "table" and type(decoded.settings) == "table"
+                    and decoded.settings.showLoader == false then
+                    showLoader = false
+                end
+                break
+            end
+        end
+    end
+
+    if not showLoader then
+        GENV.__NexusLoader = nil
+    end
+
+    if showLoader then
     local parent
     pcall(function() parent = gethui and gethui() end)
     if not parent then
@@ -358,14 +388,30 @@ do
         gui.DisplayOrder = 999997
         gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
+        local TweenService = nil
+        pcall(function() TweenService = game:GetService("TweenService") end)
+
         local frame = Instance.new("Frame")
         frame.Size = UDim2.new(0, 560, 0, 300)
-        frame.Position = UDim2.new(0.5, 0, 0, 90)
-        frame.AnchorPoint = Vector2.new(0.5, 0)
+        frame.Position = UDim2.new(0.5, 0, 0.5, 0)
+        frame.AnchorPoint = Vector2.new(0.5, 0.5)
         frame.BackgroundColor3 = Color3.fromRGB(7, 18, 31)
         frame.BackgroundTransparency = 0
         frame.BorderSizePixel = 0
         frame.Parent = gui
+
+        local uiScale = Instance.new("UIScale")
+        uiScale.Scale = 0.94
+        uiScale.Parent = frame
+        if TweenService then
+            frame.Position = UDim2.new(0.5, 0, 0.5, 18)
+            TweenService:Create(frame, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                Position = UDim2.new(0.5, 0, 0.5, 0),
+            }):Play()
+            TweenService:Create(uiScale, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                Scale = 1,
+            }):Play()
+        end
 
         local stroke = Instance.new("UIStroke")
         stroke.Color = Color3.fromRGB(62, 145, 215)
@@ -419,6 +465,18 @@ do
         statusLabel.TextXAlignment = Enum.TextXAlignment.Left
         statusLabel.Parent = frame
 
+        local countdownLabel = Instance.new("TextLabel")
+        countdownLabel.BackgroundTransparency = 1
+        countdownLabel.Position = UDim2.new(1, -92, 0, 42)
+        countdownLabel.Size = UDim2.new(0, 72, 0, 24)
+        countdownLabel.Font = Enum.Font.GothamBold
+        countdownLabel.Text = ""
+        countdownLabel.TextColor3 = Color3.fromRGB(62, 145, 215)
+        countdownLabel.TextSize = 18
+        countdownLabel.TextXAlignment = Enum.TextXAlignment.Right
+        countdownLabel.Visible = false
+        countdownLabel.Parent = frame
+
         local logLabel = Instance.new("TextLabel")
         logLabel.BackgroundTransparency = 1
         logLabel.Position = UDim2.new(0, 16, 0, 70)
@@ -432,9 +490,22 @@ do
         logLabel.TextWrapped = true
         logLabel.Parent = frame
 
+        local barBg = Instance.new("Frame")
+        barBg.Position = UDim2.new(0, 16, 1, -64)
+        barBg.Size = UDim2.new(1, -32, 0, 4)
+        barBg.BackgroundColor3 = Color3.fromRGB(13, 40, 65)
+        barBg.BorderSizePixel = 0
+        barBg.Parent = frame
+
+        local barFill = Instance.new("Frame")
+        barFill.Size = UDim2.new(0, 0, 1, 0)
+        barFill.BackgroundColor3 = Color3.fromRGB(62, 145, 215)
+        barFill.BorderSizePixel = 0
+        barFill.Parent = barBg
+
         local icon = Instance.new("Frame")
         icon.Size = UDim2.new(0, 24, 0, 24)
-        icon.Position = UDim2.new(0, 16, 0, 260)
+        icon.Position = UDim2.new(0, 16, 0, 254)
         icon.BackgroundColor3 = Color3.fromRGB(88, 101, 242)
         icon.BorderSizePixel = 0
         icon.Parent = frame
@@ -451,7 +522,7 @@ do
         iconText.Parent = icon
 
         local join = Instance.new("TextButton")
-        join.Position = UDim2.new(0, 48, 0, 258)
+        join.Position = UDim2.new(0, 48, 0, 252)
         join.Size = UDim2.new(0, 190, 0, 28)
         join.BackgroundColor3 = Color3.fromRGB(88, 101, 242)
         join.BorderSizePixel = 0
@@ -462,7 +533,7 @@ do
         join.Parent = frame
 
         local logs = {}
-        local loader = {}
+        local loader = { done = false, counting = false, bootAt = os.clock() }
         function loader.log(text)
             text = tostring(text)
             statusLabel.Text = text
@@ -471,7 +542,48 @@ do
             logLabel.Text = table.concat(logs, "\n")
         end
         function loader.close()
+            loader.done = true
+            loader.doneAt = os.clock()
             if gui.Parent then gui:Destroy() end
+        end
+        function loader.startCountdown()
+            if loader.counting or loader.done or not gui.Parent then return end
+            loader.counting = true
+            loader.countStart = os.clock()
+            countdownLabel.Visible = true
+            barFill.Size = UDim2.new(0, 0, 1, 0)
+            if TweenService then
+                TweenService:Create(barFill, TweenInfo.new(5, Enum.EasingStyle.Linear), {
+                    Size = UDim2.new(1, 0, 1, 0),
+                }):Play()
+            else
+                barFill.Size = UDim2.new(1, 0, 1, 0)
+            end
+            task.spawn(function()
+                for i = 5, 1, -1 do
+                    if not gui.Parent or loader.done then break end
+                    statusLabel.Text = "NexusTAS will start in " .. i
+                        .. (i == 1 and " second..." or " seconds...")
+                    countdownLabel.Text = tostring(i)
+                    countdownLabel.TextSize = 22
+                    if TweenService then
+                        TweenService:Create(countdownLabel,
+                            TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                            { TextSize = 15 }):Play()
+                    end
+                    loader.log("Starting in " .. i .. "...")
+                    task.wait(1)
+                end
+                loader.done = true
+                loader.doneAt = os.clock()
+                if gui.Parent then gui:Destroy() end
+            end)
+        end
+        function loader.wait()
+            local deadline = os.clock() + 12
+            while not loader.done and os.clock() < deadline do
+                task.wait(0.05)
+            end
         end
         GENV.__NexusLoader = loader
 
@@ -503,6 +615,7 @@ do
         loader.log("Character: waiting")
         loader.log("Humanoid: waiting")
         gui.Parent = parent
+    end
     end
 end
 
@@ -690,6 +803,7 @@ local settings = {
     statsSize = 11,
     ghostMode = false,
     safeTest = false,
+    showLoader = true,
 }
 
 -- ==================== RUNTIME BINDABLES ====================
@@ -4552,6 +4666,7 @@ local function buildMenuPrimitives()
             { "showStats", "Show Stats" },
             { "safeTest", "Safe Test (walk to start)" },
             { "ghostMode", "Ghost Mode (clone recording)" },
+            { "showLoader", "Show Loader on Startup" },
         }
         local y2 = cy
         for i, row in ipairs(rows) do
@@ -5075,11 +5190,9 @@ task.spawn(function()
         GENV.__NexusLoader.log("Settings: " .. (ok and "loaded" or "defaults"))
         GENV.__NexusLoader.log("Storage: " .. (base and (base .. STORE.root) or "session only"))
         GENV.__NexusLoader.log("Status: ready")
-        task.delay(2.5, function()
-            if GENV.__NexusLoader and GENV.__NexusLoader.close then
-                GENV.__NexusLoader.close()
-            end
-        end)
+        if GENV.__NexusLoader.startCountdown then
+            GENV.__NexusLoader.startCountdown()
+        end
     end
 end)
 
@@ -5095,6 +5208,20 @@ if _G.__NexusDebug then
         end
         return GENV.__NexusStore and GENV.__NexusStore.folder
     end
+    _G.__NexusDebug.setSetting = function(key, value)
+        if settings[key] ~= nil then
+            settings[key] = value
+            if GENV.__NexusStore and GENV.__NexusStore.saveSettings then
+                GENV.__NexusStore.saveSettings()
+            end
+            return true
+        end
+        return false
+    end
+end
+
+if GENV.__NexusLoader and GENV.__NexusLoader.wait then
+    GENV.__NexusLoader.wait()
 end
 
 setupGui()
