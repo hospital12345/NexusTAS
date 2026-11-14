@@ -595,10 +595,15 @@ do
                 pcall(function()
                     opened = game:GetService("GuiService"):OpenBrowserWindow(invite)
                 end)
-                if not opened and type(setclipboard) == "function" then
-                    pcall(setclipboard, invite)
+                if opened then
+                    loader.log("Opening Discord...")
+                else
+                    local copied = false
+                    if type(setclipboard) == "function" then
+                        copied = pcall(setclipboard, invite)
+                    end
+                    loader.log(copied and "Link copied!" or "Could not copy link")
                 end
-                loader.log(opened and "Opening Discord..." or "Discord link copied to clipboard")
             else
                 loader.log("Discord link is not configured yet")
             end
@@ -5068,14 +5073,17 @@ local function renderDraw()
     drawHits = {}
     drawCount = 0
 
-    if drawMenuVisible then
-        buildMenuPrimitives()
-    end
+    -- Draw the always-on elements first so their drawing-pool indices stay
+    -- stable when the menu opens. Previously the menu was built first, which
+    -- shifted the toast/HUD objects for one frame and made them flicker.
     buildToastPrimitives()
     buildHudPrimitives()
     buildPopupPrimitives()
     buildSafeTestMarker()
     buildSafeTestNotice()
+    if drawMenuVisible then
+        buildMenuPrimitives()
+    end
 
     for i = drawCount + 1, #drawPool do
         drawPool[i].Visible = false
