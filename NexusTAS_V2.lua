@@ -805,6 +805,8 @@ local settings = {
     safeTest = false,
     showLoader = true,
     theme = "Midnight",
+    relativeTest = false,
+    yOffset = 0,
 }
 
 -- ==================== RUNTIME BINDABLES ====================
@@ -854,6 +856,7 @@ local drawTab = "player"
 local searchQuery = ""
 local searchActive = false
 local themeMenuOpen = false
+local folderMenuOpen = false
 local drawHits = {}
 local drawMenuX, drawMenuY
 local bindingControl = nil
@@ -1802,9 +1805,16 @@ local function buildFrame()
 end
 
 local function shiftCF(cf)
-    if not cf or not playbackOffset then return cf end
+    if not cf then return cf end
+    local yOffset = 0
+    if mode == "test" then
+        yOffset = tonumber(settings.yOffset) or 0
+    end
+    if not playbackOffset and yOffset == 0 then return cf end
     local p = cf.Position
-    local ox, oy, oz = playbackOffset.X, playbackOffset.Y, playbackOffset.Z
+    local ox = playbackOffset and playbackOffset.X or 0
+    local oy = (playbackOffset and playbackOffset.Y or 0) - yOffset
+    local oz = playbackOffset and playbackOffset.Z or 0
     local ok, shifted = pcall(function()
         local _, _, _, r00, r01, r02, r10, r11, r12, r20, r21, r22 = cf:GetComponents()
         return CFrame.new(
@@ -2120,7 +2130,7 @@ local function beginTestPlayback(forceStart)
     -- to the clone's recorded coordinates.
     playbackOffset = nil
     local startFrame = data[startIndex]
-    if settings.ghostMode and startFrame and startFrame.cf and ROOT then
+    if (settings.ghostMode or settings.relativeTest) and startFrame and startFrame.cf and ROOT then
         local startPos = startFrame.cf.Position
         local realPos = ROOT.Position
         local dx = realPos.X - startPos.X
@@ -3810,6 +3820,7 @@ local function toggleGui()
     drawMenuVisible = not drawMenuVisible
     if not drawMenuVisible then
         themeMenuOpen = false
+        folderMenuOpen = false
         if GENV.__NexusSetSearch then
             GENV.__NexusSetSearch(false)
         end
@@ -4774,6 +4785,7 @@ local function buildMenuPrimitives()
     addHit("menu_close", x + w - 32, y + 7, 22, 22, function()
         drawMenuVisible = false
         themeMenuOpen = false
+        folderMenuOpen = false
         if GENV.__NexusSetSearch then GENV.__NexusSetSearch(false) end
     end)
 
@@ -4805,6 +4817,7 @@ local function buildMenuPrimitives()
         addHit(id, x + 10, sy, sidebarW - 20, 30, function()
             drawTab = key
             themeMenuOpen = false
+            folderMenuOpen = false
             if key == "saves" then
                 runsLoading = true
                 task.spawn(function()
@@ -4899,6 +4912,7 @@ local function buildMenuPrimitives()
             { "showStats", "Show Stats" },
             { "safeTest", "Safe Test (walk to start)" },
             { "ghostMode", "Ghost Mode (clone recording)" },
+            { "relativeTest", "Relative Test (start from here)" },
         }
         local y2 = cy
         local shown = 0
@@ -5026,28 +5040,31 @@ local function buildMenuPrimitives()
             end
         end
         table.sort(folders)
-        local folderIndex = 1
-        for i, name in ipairs(folders) do
-            if name == folder then folderIndex = i end
+        local folderOptionHits = {}
+        sq(cx, cy + 30, cw, 24, COL.row, 0.1, 12, true)
+        txt(cx + 10, cy + 36, 11, "Folder: " .. folder,
+            COL.text, Drawing.Fonts.UI, 0, 21, false, true)
+        txt(cx + cw - 24, cy + 36, 10, folderMenuOpen and "^" or "v",
+            COL.subtext, Drawing.Fonts.Monospace, 0, 21, false, true)
+        addHit("folder_dropdown", cx, cy + 30, cw, 24, function()
+            folderMenuOpen = not folderMenuOpen
+        end)
+
+        if folderMenuOpen then
+            local optionY = cy + 57
+            local maxOptions = 8
+            for index = 1, math.min(#folders, maxOptions) do
+                local name = folders[index]
+                local active = name == folder
+                sq(cx, optionY, cw, 20, active and COL.button or COL.rowAlt, 0.06, 30, true)
+                txt(cx + 10, optionY + 4, 10, name,
+                    active and COL.text or COL.subtext, Drawing.Fonts.UI, 0, 31, false, true)
+                folderOptionHits[#folderOptionHits + 1] = {
+                    name = name, x = cx, y = optionY, w = cw, h = 20,
+                }
+                optionY += 21
+            end
         end
-        drawButton("folder_prev", cx, cy + 30, 24, 20, "<", function()
-            if #folders > 1 then
-                folderIndex = folderIndex - 1
-                if folderIndex < 1 then folderIndex = #folders end
-                STORE.folder = folders[folderIndex]
-                STORE.saveSettings()
-            end
-        end)
-        drawButton("folder_next", cx + cw - 24, cy + 30, 24, 20, ">", function()
-            if #folders > 1 then
-                folderIndex = folderIndex + 1
-                if folderIndex > #folders then folderIndex = 1 end
-                STORE.folder = folders[folderIndex]
-                STORE.saveSettings()
-            end
-        end)
-        txt(cx + 32, cy + 35, 11, "Folder: " .. folder,
-            COL.text, Drawing.Fonts.Monospace, 0, 21, false, true)
 
         local storageLabel
         if fileMode then
@@ -5111,6 +5128,14 @@ local function buildMenuPrimitives()
                     COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
             end
         end
+
+        for index, option in ipairs(folderOptionHits) do
+            addHit("folder_opt_" .. index, option.x, option.y, option.w, option.h, function()
+                STORE.folder = option.name
+                folderMenuOpen = false
+                STORE.saveSettings()
+            end)
+        end
     elseif drawTab == "help" then
         local lines = {
             "CONTROLS", "",
@@ -5138,30 +5163,38 @@ local function buildMenuPrimitives()
     elseif drawTab == "info" then
         local lines = {
             "NexusTAS " .. VERSION, "",
-            "CHANGELOG", "",
-            "2.0.1",
-            "- ClickGUI with sidebar categories",
-            "- Module search (Player / Binds / Saves)",
-            "- Six color themes",
-            "- Startup Loader with 5 second countdown",
-            "- Loader can be disabled in Client",
-            "- NexusTAS folder with game subfolders",
-            "- Create folders and rename runs",
-            "- FPS is stored with every saved run",
-            "- FPS mismatch prompt (Dismiss / Yes)",
-            "- Settings and keybinds auto-saved",
-            "- Discord link in the menu footer", "",
-            "NOTES",
-            "- Settings are saved automatically to NexusTAS/settings.json.",
-            "- Runs are stored in NexusTAS/runs.",
-            "- R6 character required for animation recording.",
-            "- Export/Import works through the clipboard.",
-            "- Re-injecting replaces the previous instance.",
+            "WHAT'S NEW",
+            "- Relative Test: start playback where you stand",
+            "- Y Offset: lower playback height",
+            "- Folder dropdown for organizing runs",
+            "- FPS is saved with every run",
+            "- Menu search and six themes",
+            "- Settings save automatically", "",
+            "TIPS",
+            "- Y Offset only affects playback",
+            "- R6 is required for recording",
+            "- Export/Import uses the clipboard",
+            "- Re-injecting replaces the old instance",
         }
         for i, line in ipairs(lines) do
             txt(cx, cy + (i - 1) * 17, 11, line, COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
         end
     end
+
+    local yBar = y + h - 50
+    sq(cx, yBar, cw, 24, COL.row, 0.08, 12, true)
+    txt(cx + 10, yBar + 6, 11, "Y Offset (lower)", COL.text,
+        Drawing.Fonts.UI, 0, 21, false, true)
+    drawButton("yoff_minus", cx + cw - 104, yBar + 3, 24, 18, "-", function()
+        settings.yOffset = math.clamp(round((settings.yOffset or 0) - 0.5, 10), -50, 50)
+        if STORE and STORE.saveSettings then STORE.saveSettings() end
+    end)
+    drawButton("yoff_plus", cx + cw - 34, yBar + 3, 24, 18, "+", function()
+        settings.yOffset = math.clamp(round((settings.yOffset or 0) + 0.5, 10), -50, 50)
+        if STORE and STORE.saveSettings then STORE.saveSettings() end
+    end)
+    txt(cx + cw - 65, yBar + 6, 10, string.format("%.1f", settings.yOffset or 0),
+        COL.text, Drawing.Fonts.Monospace, 0, 21, false, true)
 
     local footer = statusText
     if ghost.active then footer = footer .. "  [GHOST]" end
@@ -5436,10 +5469,19 @@ drawInputBegan = function(inp)
     for i = #drawHits, 1, -1 do
         local h = drawHits[i]
         if inside(m.X, m.Y, h) then
+            local id = tostring(h.id or "")
+            local isDropdown = id == "theme_dropdown" or id:find("^theme_opt_")
+                or id == "folder_dropdown" or id:find("^folder_opt_")
+            if not isDropdown then
+                themeMenuOpen = false
+                folderMenuOpen = false
+            end
             if h.fn then task.spawn(h.fn) end
             return true
         end
     end
+    themeMenuOpen = false
+    folderMenuOpen = false
     return false
 end
 
@@ -5560,6 +5602,14 @@ if _G.__NexusDebug then
     _G.__NexusDebug.themeMenu = function(value)
         themeMenuOpen = value == nil and not themeMenuOpen or value == true
         return themeMenuOpen
+    end
+    _G.__NexusDebug.folderMenu = function(value)
+        folderMenuOpen = value == nil and not folderMenuOpen or value == true
+        return folderMenuOpen
+    end
+    _G.__NexusDebug.setYOffset = function(value)
+        settings.yOffset = math.clamp(tonumber(value) or 0, -50, 50)
+        return settings.yOffset
     end
 end
 
