@@ -4795,7 +4795,7 @@ local function buildMenuPrimitives()
     sq(x + sidebarW, y + 37, 1, h - 37, COL.border, 0.25, 12, true)
 
     local categories = {
-        { "player", "Player" },
+        { "player", "TAS Settings" },
         { "saves", "Saves" },
         { "binds", "Binds" },
         { "client", "Client" },
@@ -5181,19 +5181,21 @@ local function buildMenuPrimitives()
         end
     end
 
-    local yBar = y + h - 50
-    sq(cx, yBar, cw, 24, COL.row, 0.08, 12, true)
+    local yBar = y + h - 64
+    sq(cx, yBar, cw, 40, COL.row, 0.08, 12, true)
     txt(cx + 10, yBar + 6, 11, "Y Offset (lower)", COL.text,
         Drawing.Fonts.UI, 0, 21, false, true)
-    drawButton("yoff_minus", cx + cw - 104, yBar + 3, 24, 18, "-", function()
+    txt(cx + 10, yBar + 22, 8, "Don't touch unless you know what this does.",
+        COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
+    drawButton("yoff_minus", cx + cw - 104, yBar + 9, 24, 18, "-", function()
         settings.yOffset = math.clamp(round((settings.yOffset or 0) - 0.5, 10), -50, 50)
         if STORE and STORE.saveSettings then STORE.saveSettings() end
     end)
-    drawButton("yoff_plus", cx + cw - 34, yBar + 3, 24, 18, "+", function()
+    drawButton("yoff_plus", cx + cw - 34, yBar + 9, 24, 18, "+", function()
         settings.yOffset = math.clamp(round((settings.yOffset or 0) + 0.5, 10), -50, 50)
         if STORE and STORE.saveSettings then STORE.saveSettings() end
     end)
-    txt(cx + cw - 65, yBar + 6, 10, string.format("%.1f", settings.yOffset or 0),
+    txt(cx + cw - 65, yBar + 12, 10, string.format("%.1f", settings.yOffset or 0),
         COL.text, Drawing.Fonts.Monospace, 0, 21, false, true)
 
     local footer = statusText
