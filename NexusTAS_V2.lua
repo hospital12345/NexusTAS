@@ -804,6 +804,7 @@ local settings = {
     ghostMode = false,
     safeTest = false,
     showLoader = true,
+    theme = "Midnight",
 }
 
 -- ==================== RUNTIME BINDABLES ====================
@@ -850,6 +851,8 @@ local popupUntil = 0
 local animAvailable = false
 local drawMenuVisible = false
 local drawTab = "main"
+local searchQuery = ""
+local searchActive = false
 local drawHits = {}
 local drawMenuX, drawMenuY
 local bindingControl = nil
@@ -2372,6 +2375,7 @@ if type(STORE) ~= "table" then
 end
 local MANIFEST = STORE.manifestFile
 local savedRuns = {}
+local runsLoading = false
 local fileStorageUsable = nil
 local memorySaves = GENV.__NexusMemorySaves
 if type(memorySaves) ~= "table" then
@@ -2854,6 +2858,7 @@ local function refreshSavedRuns()
     table.sort(savedRuns, function(a, b)
         return (a.savedAt or a.name) > (b.savedAt or b.name)
     end)
+    runsLoading = false
 end
 
 local function makeRunPayload()
@@ -3794,6 +3799,7 @@ end)
 
 -- ==================== INPUT ====================
 local drawInputBegan, drawInputChanged, drawInputEnded
+local drawSearchInput
 
 local function matches(inp, bind)
     return inp.KeyCode == bind or inp.UserInputType == bind
@@ -3801,6 +3807,7 @@ end
 
 local function toggleGui()
     drawMenuVisible = not drawMenuVisible
+    if not drawMenuVisible then searchActive = false end
 end
 
 connect(UIS.JumpRequest, function()
@@ -3819,6 +3826,10 @@ end)
 connect(UIS.InputBegan, function(inp, processed)
     if drawInputBegan then
         local ok, consumed = pcall(drawInputBegan, inp)
+        if ok and consumed then return end
+    end
+    if drawSearchInput then
+        local ok, consumed = pcall(drawSearchInput, inp)
         if ok and consumed then return end
     end
     if bindingControl then
@@ -4372,6 +4383,129 @@ local COL = {
     white = Color3.fromRGB(240, 248, 255),
 }
 
+local THEMES = {
+    Midnight = {
+        bg = Color3.fromRGB(7, 18, 31), title = Color3.fromRGB(9, 30, 52),
+        panel = Color3.fromRGB(10, 28, 46), row = Color3.fromRGB(13, 40, 65),
+        rowAlt = Color3.fromRGB(11, 33, 54), button = Color3.fromRGB(25, 86, 142),
+        buttonHover = Color3.fromRGB(38, 112, 178), accent = Color3.fromRGB(62, 145, 215),
+        text = Color3.fromRGB(222, 238, 252), subtext = Color3.fromRGB(125, 170, 205),
+        border = Color3.fromRGB(30, 83, 125), danger = Color3.fromRGB(220, 95, 105),
+        white = Color3.fromRGB(240, 248, 255),
+    },
+    Ocean = {
+        bg = Color3.fromRGB(4, 16, 24), title = Color3.fromRGB(7, 34, 46),
+        panel = Color3.fromRGB(7, 26, 38), row = Color3.fromRGB(10, 40, 54),
+        rowAlt = Color3.fromRGB(9, 34, 48), button = Color3.fromRGB(20, 92, 120),
+        buttonHover = Color3.fromRGB(30, 125, 155), accent = Color3.fromRGB(64, 205, 220),
+        text = Color3.fromRGB(225, 248, 252), subtext = Color3.fromRGB(130, 185, 205),
+        border = Color3.fromRGB(28, 105, 130), danger = Color3.fromRGB(220, 90, 100),
+        white = Color3.fromRGB(242, 252, 255),
+    },
+    Sakura = {
+        bg = Color3.fromRGB(28, 13, 21), title = Color3.fromRGB(50, 22, 35),
+        panel = Color3.fromRGB(40, 18, 28), row = Color3.fromRGB(57, 24, 38),
+        rowAlt = Color3.fromRGB(49, 20, 33), button = Color3.fromRGB(150, 58, 95),
+        buttonHover = Color3.fromRGB(185, 78, 118), accent = Color3.fromRGB(246, 142, 178),
+        text = Color3.fromRGB(255, 236, 244), subtext = Color3.fromRGB(205, 150, 175),
+        border = Color3.fromRGB(105, 44, 68), danger = Color3.fromRGB(235, 80, 95),
+        white = Color3.fromRGB(255, 246, 250),
+    },
+    Matrix = {
+        bg = Color3.fromRGB(4, 17, 9), title = Color3.fromRGB(6, 36, 18),
+        panel = Color3.fromRGB(6, 28, 14), row = Color3.fromRGB(10, 46, 23),
+        rowAlt = Color3.fromRGB(8, 39, 19), button = Color3.fromRGB(20, 110, 50),
+        buttonHover = Color3.fromRGB(30, 155, 72), accent = Color3.fromRGB(64, 232, 112),
+        text = Color3.fromRGB(222, 255, 232), subtext = Color3.fromRGB(122, 205, 152),
+        border = Color3.fromRGB(30, 105, 56), danger = Color3.fromRGB(215, 80, 80),
+        white = Color3.fromRGB(240, 255, 245),
+    },
+    Sunset = {
+        bg = Color3.fromRGB(26, 11, 9), title = Color3.fromRGB(50, 21, 15),
+        panel = Color3.fromRGB(41, 17, 13), row = Color3.fromRGB(62, 26, 20),
+        rowAlt = Color3.fromRGB(52, 22, 17), button = Color3.fromRGB(152, 68, 28),
+        buttonHover = Color3.fromRGB(195, 95, 42), accent = Color3.fromRGB(255, 162, 72),
+        text = Color3.fromRGB(255, 240, 230), subtext = Color3.fromRGB(220, 160, 120),
+        border = Color3.fromRGB(112, 50, 28), danger = Color3.fromRGB(230, 80, 80),
+        white = Color3.fromRGB(255, 246, 236),
+    },
+    Mono = {
+        bg = Color3.fromRGB(14, 14, 16), title = Color3.fromRGB(30, 30, 34),
+        panel = Color3.fromRGB(22, 22, 25), row = Color3.fromRGB(33, 33, 37),
+        rowAlt = Color3.fromRGB(27, 27, 30), button = Color3.fromRGB(72, 72, 80),
+        buttonHover = Color3.fromRGB(98, 98, 108), accent = Color3.fromRGB(205, 205, 215),
+        text = Color3.fromRGB(242, 242, 246), subtext = Color3.fromRGB(150, 150, 160),
+        border = Color3.fromRGB(62, 62, 70), danger = Color3.fromRGB(210, 80, 80),
+        white = Color3.fromRGB(252, 252, 255),
+    },
+}
+
+function THEMES.apply(name)
+    if type(THEMES[name]) ~= "table" then
+        name = "Midnight"
+        settings.theme = name
+    end
+    local theme = THEMES[name] or THEMES.Midnight
+    for key, value in pairs(theme) do
+        COL[key] = value
+    end
+    THEMES.applied = name
+end
+
+function THEMES.cycle(direction)
+    local names = {}
+    for name, theme in pairs(THEMES) do
+        if type(name) == "string" and type(theme) == "table" then
+            names[#names + 1] = name
+        end
+    end
+    table.sort(names)
+    local index = 1
+    for i, name in ipairs(names) do
+        if name == settings.theme then index = i end
+    end
+    index += (direction or 1)
+    if index < 1 then index = #names end
+    if index > #names then index = 1 end
+    settings.theme = names[index]
+    THEMES.apply(settings.theme)
+    if STORE and STORE.saveSettings then STORE.saveSettings() end
+end
+
+local function matchesSearch(label)
+    if searchQuery == "" then return true end
+    return tostring(label):lower():find(searchQuery:lower(), 1, true) ~= nil
+end
+
+drawSearchInput = function(inp)
+    if not drawMenuVisible or not searchActive then return false end
+    if inp.UserInputType ~= Enum.UserInputType.Keyboard then return false end
+    local key = inp.KeyCode
+    if key == Enum.KeyCode.Escape or key == Enum.KeyCode.Return then
+        searchActive = false
+        return true
+    end
+    if key == Enum.KeyCode.Backspace then
+        searchQuery = searchQuery:sub(1, -2)
+        return true
+    end
+    local name = key.Name
+    if key == Enum.KeyCode.Space then
+        searchQuery = searchQuery .. " "
+    elseif type(name) == "string" and #name == 1 then
+        searchQuery = searchQuery .. name:lower()
+    end
+    if #searchQuery > 32 then searchQuery = searchQuery:sub(1, 32) end
+    return true
+end
+
+if _G.__NexusDebug then
+    _G.__NexusDebug.setSearch = function(query)
+        searchQuery = tostring(query or "")
+        searchActive = true
+    end
+end
+
 local drawW, drawH = 700, 600
 local drawHover = nil
 local drawDragging = false
@@ -4575,8 +4709,19 @@ local function buildMenuPrimitives()
     sq(x, y + 36, w, 1, COL.border, 0.35, 12, true)
     txt(x + 14, y + 9, 17, "NexusTAS", COL.text, Drawing.Fonts.UI, 0, 22, false, true)
     txt(x + 118, y + 14, 10, "V" .. tostring(VERSION), COL.subtext, Drawing.Fonts.Monospace, 0, 22, false, true)
-    txt(x + w - 118, y + 14, 9, "CLICKGUI", COL.accent, Drawing.Fonts.Monospace, 0, 22, false, true)
-    addHit("menu_drag", x, y, w - 40, 36, function()
+
+    local searchW, searchH = 200, 22
+    local searchX, searchY = x + w - 44 - searchW, y + 7
+    sq(searchX, searchY, searchW, searchH, COL.panel, 0.08, 13, true)
+    sq(searchX, searchY, searchW, searchH, searchActive and COL.accent or COL.border, 0.45, 14, false, 1)
+    local searchText = searchQuery ~= "" and searchQuery or "Search..."
+    txt(searchX + 8, searchY + 5, 10, searchText .. (searchActive and "|" or ""),
+        searchQuery ~= "" and COL.text or COL.subtext, Drawing.Fonts.Monospace, 0, 22, false, true)
+    addHit("search_box", searchX, searchY, searchW, searchH, function()
+        searchActive = not searchActive
+    end)
+
+    addHit("menu_drag", x, y, w - 300, 36, function()
         drawDragging = true
         local m = UIS:GetMouseLocation()
         drawDragMX, drawDragMY = m.X, m.Y
@@ -4587,7 +4732,10 @@ local function buildMenuPrimitives()
     local closeHover = drawHover == "menu_close"
     sq(x + w - 32, y + 7, 22, 22, closeHover and COL.danger or COL.button, 0.08, 13, true)
     txt(x + w - 21, y + 10, 12, "X", COL.text, Drawing.Fonts.UI, 0, 23, true, true)
-    addHit("menu_close", x + w - 32, y + 7, 22, 22, function() drawMenuVisible = false end)
+    addHit("menu_close", x + w - 32, y + 7, 22, 22, function()
+        drawMenuVisible = false
+        searchActive = false
+    end)
 
     -- Left category rail
     local sidebarW = 166
@@ -4617,15 +4765,31 @@ local function buildMenuPrimitives()
             Drawing.Fonts.UI, 0, 22, false, true)
         addHit(id, x + 10, sy, sidebarW - 20, 30, function()
             drawTab = key
-            if key == "saves" then refreshSavedRuns() end
+            if key == "saves" then
+                runsLoading = true
+                task.spawn(function()
+                    task.wait(0.12)
+                    refreshSavedRuns()
+                    runsLoading = false
+                end)
+            end
         end)
         sy += 34
     end
 
     -- Watermark
-    sq(x + 16, y + h - 34, 7, 7, COL.accent, 0.05, 20, true)
-    txt(x + 28, y + h - 38, 10, "NexusTAS V" .. tostring(VERSION), COL.subtext,
-        Drawing.Fonts.Monospace, 0, 20, false, true)
+    local discordLabel = tostring(GENV.__NexusDiscord or "")
+    if discordLabel ~= "" then
+        local dw = measureText(discordLabel, 9, Drawing.Fonts.Monospace)
+        txt(x + w - 20 - dw, y + h - 22, 9, discordLabel, COL.subtext,
+            Drawing.Fonts.Monospace, 0, 20, false, true)
+        addHit("menu_discord", x + w - 24 - dw, y + h - 25, dw + 8, 18, function()
+            if type(setclipboard) == "function" then
+                local copied = pcall(setclipboard, discordLabel)
+                popup(copied and "Link copied!" or "Could not copy link", 2)
+            end
+        end)
+    end
 
     local cx, cy = x + sidebarW + 16, y + 82
     local cw = w - sidebarW - 32
@@ -4717,19 +4881,26 @@ local function buildMenuPrimitives()
         }
         local rowH, rowGap = 22, 3
         local ry = rowStart
+        local shownBinds = 0
         for i, row in ipairs(rows) do
             local key, label = row[1], row[2]
-            sq(cx, ry, cw, rowH, (i % 2 == 0) and COL.rowAlt or COL.row, 0.1, 12, true)
-            txt(cx + 10, ry + 5, 11, label, COL.text, Drawing.Fonts.UI, 0, 21, false, true)
-            local keyW, keyH = 176, 18
-            local kx, ky = cx + cw - keyW - 4, ry + 2
-            local binding = bindingControl == key
-            local hover = drawHover == ("bind_" .. key)
-            sq(kx, ky, keyW, keyH, binding and COL.accent or (hover and COL.buttonHover or COL.button), 0.05, 13, true)
-            local keyText = binding and "Press a key..." or keyName(CONTROLS[key])
-            txt(kx + keyW * 0.5, ky + 3, 10, keyText, COL.text, Drawing.Fonts.UI, 0, 22, true, true)
-            addHit("bind_" .. key, kx, ky, keyW, keyH, function() bindingControl = key end)
-            ry += rowH + rowGap
+            if matchesSearch(label) then
+                shownBinds += 1
+                sq(cx, ry, cw, rowH, (shownBinds % 2 == 0) and COL.rowAlt or COL.row, 0.1, 12, true)
+                txt(cx + 10, ry + 5, 11, label, COL.text, Drawing.Fonts.UI, 0, 21, false, true)
+                local keyW, keyH = 176, 18
+                local kx, ky = cx + cw - keyW - 4, ry + 2
+                local binding = bindingControl == key
+                local hover = drawHover == ("bind_" .. key)
+                sq(kx, ky, keyW, keyH, binding and COL.accent or (hover and COL.buttonHover or COL.button), 0.05, 13, true)
+                local keyText = binding and "Press a key..." or keyName(CONTROLS[key])
+                txt(kx + keyW * 0.5, ky + 3, 10, keyText, COL.text, Drawing.Fonts.UI, 0, 22, true, true)
+                addHit("bind_" .. key, kx, ky, keyW, keyH, function() bindingControl = key end)
+                ry += rowH + rowGap
+            end
+        end
+        if shownBinds == 0 then
+            txt(cx, ry, 11, "No modules found.", COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
         end
         local resetY = ry + 3
         drawButton("controls_reset", cx, resetY, cw, 20, "Reset to Defaults", function()
@@ -4748,22 +4919,29 @@ local function buildMenuPrimitives()
             { "ghostMode", "Ghost Mode (clone recording)" },
         }
         local y2 = cy
+        local shown = 0
         for i, row in ipairs(rows) do
             local key, label = row[1], row[2]
-            drawToggle("set_" .. key, cx, y2, cw, 24, label, settings[key], function()
-                settings[key] = not settings[key]
-                if STORE and STORE.saveSettings then STORE.saveSettings() end
-                if key == "ghostMode" then
-                    if settings.ghostMode then
-                        if mode == "create" and enterGhost then
-                            if not enterGhost() then settings.ghostMode = false end
+            if matchesSearch(label) then
+                shown += 1
+                drawToggle("set_" .. key, cx, y2, cw, 24, label, settings[key], function()
+                    settings[key] = not settings[key]
+                    if STORE and STORE.saveSettings then STORE.saveSettings() end
+                    if key == "ghostMode" then
+                        if settings.ghostMode then
+                            if mode == "create" and enterGhost then
+                                if not enterGhost() then settings.ghostMode = false end
+                            end
+                        elseif ghost.active and exitGhost then
+                            exitGhost()
                         end
-                    elseif ghost.active and exitGhost then
-                        exitGhost()
                     end
-                end
-            end)
-            y2 += 27
+                end)
+                y2 += 27
+            end
+        end
+        if shown == 0 then
+            txt(cx, cy, 11, "No modules found.", COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
         end
     elseif drawTab == "client" then
         drawToggle("set_showLoader", cx, cy, cw, 26, "Show Loader on Startup", settings.showLoader, function()
@@ -4801,6 +4979,18 @@ local function buildMenuPrimitives()
         end)
         txt(cx, y2 + 78, 10, "Discord: " .. tostring(GENV.__NexusDiscord or ""),
             COL.subtext, Drawing.Fonts.Monospace, 0, 21, false, true)
+
+        local themeY = y2 + 102
+        sq(cx, themeY, cw, 26, COL.row, 0.1, 12, true)
+        txt(cx + 12, themeY + 7, 11, "Theme", COL.text, Drawing.Fonts.UI, 0, 21, false, true)
+        drawButton("theme_prev", cx + cw - 108, themeY + 4, 24, 18, "<", function()
+            THEMES.cycle(-1)
+        end)
+        drawButton("theme_next", cx + cw - 34, themeY + 4, 24, 18, ">", function()
+            THEMES.cycle(1)
+        end)
+        txt(cx + cw - 71, themeY + 7, 10, tostring(settings.theme),
+            COL.subtext, Drawing.Fonts.Monospace, 0, 21, false, true)
     elseif drawTab == "saves" then
         local basePath = fileBase
         local fileMode = hasFileApi() and fileStorageUsable ~= false
@@ -4817,7 +5007,12 @@ local function buildMenuPrimitives()
             end)
         end)
         drawButton("refresh_runs", cx + 294, cy, 80, 24, "Refresh", function()
-            refreshSavedRuns()
+            runsLoading = true
+            task.spawn(function()
+                task.wait(0.12)
+                refreshSavedRuns()
+                runsLoading = false
+            end)
         end)
 
         local folders = {}
@@ -4872,11 +5067,14 @@ local function buildMenuPrimitives()
 
         local list = {}
         for _, run in ipairs(savedRuns) do
-            if run.folder == folder then list[#list + 1] = run end
+            if run.folder == folder and matchesSearch(run.name) then list[#list + 1] = run end
         end
 
         local ry = cy + 100
-        if #list == 0 then
+        if runsLoading then
+            txt(cx + 2, ry, 11, "Loading...",
+                COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
+        elseif #list == 0 then
             txt(cx + 2, ry, 11, "No saved runs in this folder.",
                 COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
         else
@@ -5153,6 +5351,9 @@ end
 
 local function renderDraw()
     if not Drawing then return end
+    if THEMES.applied ~= settings.theme then
+        THEMES.apply(settings.theme)
+    end
     local mouse = UIS:GetMouseLocation()
     local hover = nil
     for i = #drawHits, 1, -1 do
