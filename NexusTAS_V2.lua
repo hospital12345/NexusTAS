@@ -790,11 +790,6 @@ local function findBindConflicts()
             end
         end
     end
-    for key, bind in pairs(CONTROLS) do
-        if key ~= "Menu" and bind == Enum.KeyCode.M then
-            table.insert(result, "M is reserved for the Main Menu")
-        end
-    end
     return result
 end
 
@@ -854,7 +849,7 @@ local popupText = ""
 local popupUntil = 0
 local animAvailable = false
 local drawMenuVisible = false
-local drawTab = "controls"
+local drawTab = "main"
 local drawHits = {}
 local drawMenuX, drawMenuY
 local bindingControl = nil
@@ -3838,9 +3833,6 @@ connect(UIS.InputBegan, function(inp, processed)
         if captured then
             CONTROLS[bindingControl] = captured
             if STORE and STORE.saveSettings then STORE.saveSettings() end
-            if captured == Enum.KeyCode.M and bindingControl ~= "Menu" then
-                popup("M is reserved for the Main Menu", 3)
-            end
             local conflict = bindConflictFor(bindingControl)
             if conflict then
                 popup("Key conflict: " .. keyName(captured) .. " also used by " .. conflict, 3.5)
@@ -3853,7 +3845,7 @@ connect(UIS.InputBegan, function(inp, processed)
     -- Menu and pause/unpause are core TAS inputs; keep them working even when
     -- the game has processed the input (chat, game GUI) or the character is
     -- temporarily unavailable (respawn / ghost swap).
-    if matches(inp, CONTROLS.Menu) or inp.KeyCode == Enum.KeyCode.M then
+    if matches(inp, CONTROLS.Menu) then
         toggleGui()
         return
     end
@@ -4380,7 +4372,7 @@ local COL = {
     white = Color3.fromRGB(240, 248, 255),
 }
 
-local drawW, drawH = 520, 560
+local drawW, drawH = 700, 600
 local drawHover = nil
 local drawDragging = false
 local drawDragMX, drawDragMY = 0, 0
@@ -4551,11 +4543,16 @@ end
 
 local function drawToggle(id, x, y, w, h, label, value, onClick)
     local hover = drawHover == id
-    local color = value and COL.button or (hover and COL.buttonHover or COL.panel)
-    sq(x, y, w, h, COL.row, 0.1, 12, true)
-    txt(x + 10, y + 5, 11, label, COL.text, Drawing.Fonts.UI, 0, 21, false, true)
-    sq(x + w - 64, y + 3, 54, h - 6, color, 0.05, 13, true)
-    txt(x + w - 37, y + h * 0.5 - 6, 10, value and "ON" or "OFF", COL.text, Drawing.Fonts.UI, 0, 22, true, true)
+    sq(x, y, w, h, hover and COL.rowAlt or COL.row, 0.1, 12, true)
+    if value then
+        sq(x, y, 2, h, COL.accent, 0.05, 13, true)
+    end
+    txt(x + 12, y + h * 0.5 - 6, 11, label, COL.text, Drawing.Fonts.UI, 0, 21, false, true)
+    local trackX, trackY = x + w - 52, y + h * 0.5 - 7
+    sq(trackX, trackY, 40, 14, value and COL.button or COL.panel, 0.05, 13, true)
+    sq(trackX, trackY, 40, 14, COL.border, 0.45, 14, false, 1)
+    local knobX = trackX + (value and 33 or 7)
+    circle(knobX, y + h * 0.5, 5.5, value and COL.white or COL.subtext, 1, 15, true, 1)
     addHit(id, x, y, w, h, onClick)
 end
 
@@ -4569,14 +4566,17 @@ local function buildMenuPrimitives()
     local w, h = drawW, drawH
 
     -- Base panel + any click inside is consumed by the menu.
-    sq(x, y, w, h, COL.bg, 0.03, 10, true)
-    sq(x, y, w, h, COL.border, 0.15, 11, false, 1)
+    sq(x, y, w, h, COL.bg, 0.02, 10, true)
+    sq(x, y, w, h, COL.border, 0.12, 11, false, 1)
     addHit("menu_bg", x, y, w, h, function() end)
 
-    -- Title bar / dragging
-    sq(x, y, w, 34, COL.title, 0.03, 12, true)
-    txt(x + w * 0.5, y + 8, 16, "NexusTAS V" .. VERSION, COL.text, Drawing.Fonts.UI, 0, 22, true, true)
-    addHit("menu_drag", x, y, w - 40, 34, function()
+    -- Header / watermark
+    sq(x, y, w, 36, COL.title, 0.02, 12, true)
+    sq(x, y + 36, w, 1, COL.border, 0.35, 12, true)
+    txt(x + 14, y + 9, 17, "NexusTAS", COL.text, Drawing.Fonts.UI, 0, 22, false, true)
+    txt(x + 118, y + 14, 10, "V" .. tostring(VERSION), COL.subtext, Drawing.Fonts.Monospace, 0, 22, false, true)
+    txt(x + w - 118, y + 14, 9, "CLICKGUI", COL.accent, Drawing.Fonts.Monospace, 0, 22, false, true)
+    addHit("menu_drag", x, y, w - 40, 36, function()
         drawDragging = true
         local m = UIS:GetMouseLocation()
         drawDragMX, drawDragMY = m.X, m.Y
@@ -4585,43 +4585,118 @@ local function buildMenuPrimitives()
 
     -- Close
     local closeHover = drawHover == "menu_close"
-    sq(x + w - 32, y + 6, 22, 22, closeHover and COL.danger or COL.button, 0.1, 13, true)
-    txt(x + w - 21, y + 9, 12, "X", COL.text, Drawing.Fonts.UI, 0, 23, true, true)
-    addHit("menu_close", x + w - 32, y + 6, 22, 22, function() drawMenuVisible = false end)
+    sq(x + w - 32, y + 7, 22, 22, closeHover and COL.danger or COL.button, 0.08, 13, true)
+    txt(x + w - 21, y + 10, 12, "X", COL.text, Drawing.Fonts.UI, 0, 23, true, true)
+    addHit("menu_close", x + w - 32, y + 7, 22, 22, function() drawMenuVisible = false end)
 
-    -- Tabs
-    local tabs = {
-        { "controls", "Controls" },
-        { "settings", "Settings" },
+    -- Left category rail
+    local sidebarW = 166
+    sq(x, y + 37, sidebarW, h - 37, COL.panel, 0.04, 11, true)
+    sq(x + sidebarW, y + 37, 1, h - 37, COL.border, 0.25, 12, true)
+
+    local categories = {
+        { "main", "Main" },
+        { "player", "Player" },
         { "saves", "Saves" },
-        { "help", "Help" },
+        { "binds", "Binds" },
+        { "client", "Client" },
         { "info", "Info" },
     }
-    local tabW, tabH, gap = 94, 24, 4
-    local tx = x + 12
-    local ty = y + 38
-    for _, tab in ipairs(tabs) do
-        local key, label = tab[1], tab[2]
+    local sy = y + 50
+    for _, category in ipairs(categories) do
+        local key, label = category[1], category[2]
         local active = drawTab == key
         local id = "tab_" .. key
         local hover = drawHover == id
-        sq(tx, ty, tabW, tabH, active and COL.button or (hover and COL.buttonHover or COL.panel), 0.08, 13, true)
+        sq(x + 10, sy, sidebarW - 20, 30,
+            active and COL.button or (hover and COL.buttonHover or COL.panel), 0.05, 13, true)
         if active then
-            sq(tx, ty + tabH - 2, tabW, 2, COL.accent, 0.05, 14, true)
+            sq(x + 10, sy, 3, 30, COL.accent, 0.02, 14, true)
         end
-        txt(tx + tabW * 0.5, ty + 5, 11, label, active and COL.text or COL.subtext,
-            Drawing.Fonts.UI, 0, 22, true, true)
-        addHit(id, tx, ty, tabW, tabH, function()
+        txt(x + 26, sy + 8, 12, label, active and COL.text or COL.subtext,
+            Drawing.Fonts.UI, 0, 22, false, true)
+        addHit(id, x + 10, sy, sidebarW - 20, 30, function()
             drawTab = key
             if key == "saves" then refreshSavedRuns() end
         end)
-        tx += tabW + gap
+        sy += 34
     end
 
-    local cx, cy = x + 12, y + 72
-    local cw = w - 24
+    -- Watermark
+    sq(x + 16, y + h - 34, 7, 7, COL.accent, 0.05, 20, true)
+    txt(x + 28, y + h - 38, 10, "NexusTAS V" .. tostring(VERSION), COL.subtext,
+        Drawing.Fonts.Monospace, 0, 20, false, true)
 
-    if drawTab == "controls" then
+    local cx, cy = x + sidebarW + 16, y + 82
+    local cw = w - sidebarW - 32
+
+    -- Category title
+    local titleText = "Main"
+    for _, category in ipairs(categories) do
+        if category[1] == drawTab then titleText = category[2] end
+    end
+    txt(cx, y + 50, 15, titleText, COL.text, Drawing.Fonts.UI, 0, 21, false, true)
+    sq(cx, y + 70, 28, 2, COL.accent, 0.05, 21, true)
+
+    if drawTab == "main" then
+        local stateLabel = statusText
+        txt(cx, cy, 10, stateLabel, COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
+        local infoLine = string.format("mode: %s   |   frames: %d   |   frame: %d/%d%s",
+            tostring(mode), #data, frame, #data, paused and "   |   paused" or "")
+        txt(cx, cy + 18, 10, infoLine, COL.accent, Drawing.Fonts.Monospace, 0, 21, false, true)
+
+        local rowY = cy + 44
+        local gap = 8
+        local colW = (cw - gap) * 0.5
+        local h = 30
+
+        local function module(id, x, y, label, key, onClick, active)
+            local hover = drawHover == id
+            sq(x, y, colW, h, active and COL.button or (hover and COL.buttonHover or COL.row), 0.06, 12, true)
+            sq(x, y, 3, h, COL.accent, 0.05, 13, true)
+            txt(x + 12, y + 9, 11, label, COL.text, Drawing.Fonts.UI, 0, 21, false, true)
+            if key then
+                local keyWidth = measureText(key, 9, Drawing.Fonts.Monospace)
+                txt(x + colW - 10 - keyWidth, y + 10, 9, key, COL.subtext,
+                    Drawing.Fonts.Monospace, 0, 21, false, true)
+            end
+            addHit(id, x, y, colW, h, onClick)
+        end
+
+        local function keyFor(name)
+            local bind = CONTROLS[name]
+            return bind and keyName(bind) or nil
+        end
+
+        module("main_idle", cx, rowY, "Idle", keyFor("Idle"), function() goIdle() end, mode == "idle")
+        module("main_create", cx + colW + gap, rowY, "Create", keyFor("Create"), function() enterCreate() end, mode == "create")
+        rowY += h + 6
+        module("main_test", cx, rowY, "Test", keyFor("Test"), function() enterTest() end, mode == "test")
+        local pauseLabel = paused and "Resume" or "Pause"
+        module("main_pause", cx + colW + gap, rowY, pauseLabel, keyFor(paused and "Unpause" or "Pause"), function()
+            if mode ~= "create" then return end
+            if paused then unpauseNow() else pauseNow() end
+        end, false)
+        rowY += h + 6
+        module("main_back1", cx, rowY, "Step -1", keyFor("Back1F"), function() stepBack() end, false)
+        module("main_fwd1", cx + colW + gap, rowY, "Step +1", keyFor("Forward1F"), function() stepForward() end, false)
+        rowY += h + 6
+        module("main_return", cx, rowY, "Return", keyFor("Return"), function() returnToPause() end, false)
+        module("main_delete", cx + colW + gap, rowY, "Delete TAS", keyFor("Delete"), function() deleteTAS() end, false)
+        rowY += h + 6
+
+        drawToggle("main_ghost", cx, rowY, cw, 28, "Ghost Mode (clone recording)", settings.ghostMode, function()
+            settings.ghostMode = not settings.ghostMode
+            if settings.ghostMode then
+                if mode == "create" and enterGhost then
+                    if not enterGhost() then settings.ghostMode = false end
+                end
+            elseif ghost.active and exitGhost then
+                exitGhost()
+            end
+            if STORE and STORE.saveSettings then STORE.saveSettings() end
+        end)
+    elseif drawTab == "binds" then
         txt(cx, cy, 10, "Click on any control to change the keybind.", COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
         local conflicts = findBindConflicts()
         local rowStart = cy + 18
@@ -4662,7 +4737,7 @@ local function buildMenuPrimitives()
             bindingControl = nil
             if STORE and STORE.saveSettings then STORE.saveSettings() end
         end)
-    elseif drawTab == "settings" then
+    elseif drawTab == "player" then
         local rows = {
             { "interpolate", "Interpolate Playback" },
             { "lockCamPaused", "Lock Camera (Paused)" },
@@ -4671,7 +4746,6 @@ local function buildMenuPrimitives()
             { "showStats", "Show Stats" },
             { "safeTest", "Safe Test (walk to start)" },
             { "ghostMode", "Ghost Mode (clone recording)" },
-            { "showLoader", "Show Loader on Startup" },
         }
         local y2 = cy
         for i, row in ipairs(rows) do
@@ -4691,22 +4765,42 @@ local function buildMenuPrimitives()
             end)
             y2 += 27
         end
-        -- Playback speed row with reliable Draw hit-testing.
-        y2 += 4
-        sq(cx, y2, cw, 24, COL.row, 0.1, 12, true)
-        txt(cx + 10, y2 + 6, 11, "Playback Speed", COL.text, Drawing.Fonts.UI, 0, 21, false, true)
+    elseif drawTab == "client" then
+        drawToggle("set_showLoader", cx, cy, cw, 26, "Show Loader on Startup", settings.showLoader, function()
+            settings.showLoader = not settings.showLoader
+            if STORE and STORE.saveSettings then STORE.saveSettings() end
+        end)
+
+        local y2 = cy + 36
+        sq(cx, y2, cw, 26, COL.row, 0.1, 12, true)
+        txt(cx + 10, y2 + 7, 11, "Playback Speed", COL.text, Drawing.Fonts.UI, 0, 21, false, true)
         local minusX = cx + cw - 130
         local plusX = cx + cw - 34
-        drawButton("speed_minus", minusX, y2 + 3, 24, 18, "-", function()
+        drawButton("speed_minus", minusX, y2 + 4, 24, 18, "-", function()
             settings.playbackSpeed = math.clamp(round(settings.playbackSpeed - 0.25, 100), 0.1, 4)
             if STORE and STORE.saveSettings then STORE.saveSettings() end
         end)
-        drawButton("speed_plus", plusX, y2 + 3, 24, 18, "+", function()
+        drawButton("speed_plus", plusX, y2 + 4, 24, 18, "+", function()
             settings.playbackSpeed = math.clamp(round(settings.playbackSpeed + 0.25, 100), 0.1, 4)
             if STORE and STORE.saveSettings then STORE.saveSettings() end
         end)
-        txt(minusX + 27, y2 + 6, 11, string.format("%.2f", settings.playbackSpeed),
+        txt(minusX + 27, y2 + 7, 11, string.format("%.2f", settings.playbackSpeed),
             COL.text, Drawing.Fonts.Monospace, 0, 21, false, true)
+
+        drawButton("client_discord", cx, y2 + 42, 190, 28, "Join Discord", function()
+            local invite = GENV.__NexusDiscord
+            if type(invite) ~= "string" or invite == "" then
+                popup("Discord link is not configured", 2)
+                return
+            end
+            local copied = false
+            if type(setclipboard) == "function" then
+                copied = pcall(setclipboard, invite)
+            end
+            popup(copied and "Link copied!" or "Could not copy link", 2)
+        end)
+        txt(cx, y2 + 78, 10, "Discord: " .. tostring(GENV.__NexusDiscord or ""),
+            COL.subtext, Drawing.Fonts.Monospace, 0, 21, false, true)
     elseif drawTab == "saves" then
         local basePath = fileBase
         local fileMode = hasFileApi() and fileStorageUsable ~= false
@@ -4829,7 +4923,7 @@ local function buildMenuPrimitives()
             "L   Look around",
             "Q   Optimize TAS",
             "Backspace   Delete TAS",
-            "M   Open / close menu", "",
+            keyName(CONTROLS.Menu) .. "   Open / close menu", "",
             "Stepping runs real physics for 1-2 frames.",
             "Camera follows the character while stepping and re-locks on pause.",
             "",
@@ -5226,6 +5320,15 @@ if _G.__NexusDebug then
         end
         return false
     end
+    _G.__NexusDebug.toggleMenu = function()
+        toggleGui()
+        return drawMenuVisible
+    end
+    _G.__NexusDebug.setTab = function(tab)
+        drawTab = tostring(tab)
+        drawMenuVisible = true
+        return drawTab
+    end
 end
 
 if GENV.__NexusLoader and GENV.__NexusLoader.wait then
@@ -5315,4 +5418,5 @@ end
 GENV.__NexusShutdown = _G.__NexusShutdown
 
 print("[NexusTAS] Loaded v" .. VERSION .. " | R6 fork: " .. tostring(isR6()))
-print("[NexusTAS] 1 Idle | 2 Create | 3 Test | LMB pause | V step | F/G frames | M menu")
+print("[NexusTAS] 1 Idle | 2 Create | 3 Test | LMB pause | V step | F/G frames | "
+    .. keyName(CONTROLS.Menu) .. " menu")
