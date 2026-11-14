@@ -850,7 +850,7 @@ local popupText = ""
 local popupUntil = 0
 local animAvailable = false
 local drawMenuVisible = false
-local drawTab = "main"
+local drawTab = "player"
 local searchQuery = ""
 local searchActive = false
 local drawHits = {}
@@ -3807,7 +3807,9 @@ end
 
 local function toggleGui()
     drawMenuVisible = not drawMenuVisible
-    if not drawMenuVisible then searchActive = false end
+    if not drawMenuVisible and GENV.__NexusSetSearch then
+        GENV.__NexusSetSearch(false)
+    end
 end
 
 connect(UIS.JumpRequest, function()
@@ -4482,7 +4484,7 @@ drawSearchInput = function(inp)
     if inp.UserInputType ~= Enum.UserInputType.Keyboard then return false end
     local key = inp.KeyCode
     if key == Enum.KeyCode.Escape or key == Enum.KeyCode.Return then
-        searchActive = false
+        if GENV.__NexusSetSearch then GENV.__NexusSetSearch(false) else searchActive = false end
         return true
     end
     if key == Enum.KeyCode.Backspace then
@@ -4502,7 +4504,35 @@ end
 if _G.__NexusDebug then
     _G.__NexusDebug.setSearch = function(query)
         searchQuery = tostring(query or "")
-        searchActive = true
+        if GENV.__NexusSetSearch then
+            GENV.__NexusSetSearch(true)
+        else
+            searchActive = true
+        end
+    end
+end
+
+function GENV.__NexusSetSearch(active)
+    active = active == true
+    if active == searchActive then return end
+    searchActive = active
+    if active then
+        GENV.__NexusSearchSaved = {
+            walk = HUMAN and HUMAN.WalkSpeed or 0,
+            jump = HUMAN and HUMAN.JumpPower or 0,
+        }
+        if HUMAN then
+            HUMAN.WalkSpeed = 0
+            HUMAN.JumpPower = 0
+            pcall(function() HUMAN:Move(Vector3.zero, false) end)
+        end
+    else
+        local saved = GENV.__NexusSearchSaved
+        if saved and HUMAN then
+            HUMAN.WalkSpeed = saved.walk or 0
+            HUMAN.JumpPower = saved.jump or 0
+        end
+        GENV.__NexusSearchSaved = nil
     end
 end
 
@@ -4718,7 +4748,11 @@ local function buildMenuPrimitives()
     txt(searchX + 8, searchY + 5, 10, searchText .. (searchActive and "|" or ""),
         searchQuery ~= "" and COL.text or COL.subtext, Drawing.Fonts.Monospace, 0, 22, false, true)
     addHit("search_box", searchX, searchY, searchW, searchH, function()
-        searchActive = not searchActive
+        if GENV.__NexusSetSearch then
+            GENV.__NexusSetSearch(not searchActive)
+        else
+            searchActive = not searchActive
+        end
     end)
 
     addHit("menu_drag", x, y, w - 300, 36, function()
@@ -4734,7 +4768,7 @@ local function buildMenuPrimitives()
     txt(x + w - 21, y + 10, 12, "X", COL.text, Drawing.Fonts.UI, 0, 23, true, true)
     addHit("menu_close", x + w - 32, y + 7, 22, 22, function()
         drawMenuVisible = false
-        searchActive = false
+        if GENV.__NexusSetSearch then GENV.__NexusSetSearch(false) end
     end)
 
     -- Left category rail
@@ -4743,7 +4777,6 @@ local function buildMenuPrimitives()
     sq(x + sidebarW, y + 37, 1, h - 37, COL.border, 0.25, 12, true)
 
     local categories = {
-        { "main", "Main" },
         { "player", "Player" },
         { "saves", "Saves" },
         { "binds", "Binds" },
@@ -4802,65 +4835,7 @@ local function buildMenuPrimitives()
     txt(cx, y + 50, 15, titleText, COL.text, Drawing.Fonts.UI, 0, 21, false, true)
     sq(cx, y + 70, 28, 2, COL.accent, 0.05, 21, true)
 
-    if drawTab == "main" then
-        local stateLabel = statusText
-        txt(cx, cy, 10, stateLabel, COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
-        local infoLine = string.format("mode: %s   |   frames: %d   |   frame: %d/%d%s",
-            tostring(mode), #data, frame, #data, paused and "   |   paused" or "")
-        txt(cx, cy + 18, 10, infoLine, COL.accent, Drawing.Fonts.Monospace, 0, 21, false, true)
-
-        local rowY = cy + 44
-        local gap = 8
-        local colW = (cw - gap) * 0.5
-        local h = 30
-
-        local function module(id, x, y, label, key, onClick, active)
-            local hover = drawHover == id
-            sq(x, y, colW, h, active and COL.button or (hover and COL.buttonHover or COL.row), 0.06, 12, true)
-            sq(x, y, 3, h, COL.accent, 0.05, 13, true)
-            txt(x + 12, y + 9, 11, label, COL.text, Drawing.Fonts.UI, 0, 21, false, true)
-            if key then
-                local keyWidth = measureText(key, 9, Drawing.Fonts.Monospace)
-                txt(x + colW - 10 - keyWidth, y + 10, 9, key, COL.subtext,
-                    Drawing.Fonts.Monospace, 0, 21, false, true)
-            end
-            addHit(id, x, y, colW, h, onClick)
-        end
-
-        local function keyFor(name)
-            local bind = CONTROLS[name]
-            return bind and keyName(bind) or nil
-        end
-
-        module("main_idle", cx, rowY, "Idle", keyFor("Idle"), function() goIdle() end, mode == "idle")
-        module("main_create", cx + colW + gap, rowY, "Create", keyFor("Create"), function() enterCreate() end, mode == "create")
-        rowY += h + 6
-        module("main_test", cx, rowY, "Test", keyFor("Test"), function() enterTest() end, mode == "test")
-        local pauseLabel = paused and "Resume" or "Pause"
-        module("main_pause", cx + colW + gap, rowY, pauseLabel, keyFor(paused and "Unpause" or "Pause"), function()
-            if mode ~= "create" then return end
-            if paused then unpauseNow() else pauseNow() end
-        end, false)
-        rowY += h + 6
-        module("main_back1", cx, rowY, "Step -1", keyFor("Back1F"), function() stepBack() end, false)
-        module("main_fwd1", cx + colW + gap, rowY, "Step +1", keyFor("Forward1F"), function() stepForward() end, false)
-        rowY += h + 6
-        module("main_return", cx, rowY, "Return", keyFor("Return"), function() returnToPause() end, false)
-        module("main_delete", cx + colW + gap, rowY, "Delete TAS", keyFor("Delete"), function() deleteTAS() end, false)
-        rowY += h + 6
-
-        drawToggle("main_ghost", cx, rowY, cw, 28, "Ghost Mode (clone recording)", settings.ghostMode, function()
-            settings.ghostMode = not settings.ghostMode
-            if settings.ghostMode then
-                if mode == "create" and enterGhost then
-                    if not enterGhost() then settings.ghostMode = false end
-                end
-            elseif ghost.active and exitGhost then
-                exitGhost()
-            end
-            if STORE and STORE.saveSettings then STORE.saveSettings() end
-        end)
-    elseif drawTab == "binds" then
+    if drawTab == "binds" then
         txt(cx, cy, 10, "Click on any control to change the keybind.", COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
         local conflicts = findBindConflicts()
         local rowStart = cy + 18
@@ -4982,15 +4957,14 @@ local function buildMenuPrimitives()
 
         local themeY = y2 + 102
         sq(cx, themeY, cw, 26, COL.row, 0.1, 12, true)
-        txt(cx + 12, themeY + 7, 11, "Theme", COL.text, Drawing.Fonts.UI, 0, 21, false, true)
+        txt(cx + 12, themeY + 7, 11, "Theme: " .. tostring(settings.theme),
+            COL.text, Drawing.Fonts.UI, 0, 21, false, true)
         drawButton("theme_prev", cx + cw - 108, themeY + 4, 24, 18, "<", function()
             THEMES.cycle(-1)
         end)
         drawButton("theme_next", cx + cw - 34, themeY + 4, 24, 18, ">", function()
             THEMES.cycle(1)
         end)
-        txt(cx + cw - 71, themeY + 7, 10, tostring(settings.theme),
-            COL.subtext, Drawing.Fonts.Monospace, 0, 21, false, true)
     elseif drawTab == "saves" then
         local basePath = fileBase
         local fileMode = hasFileApi() and fileStorageUsable ~= false
@@ -5354,6 +5328,10 @@ local function renderDraw()
     if THEMES.applied ~= settings.theme then
         THEMES.apply(settings.theme)
     end
+    if searchActive and HUMAN then
+        HUMAN.WalkSpeed = 0
+        HUMAN.JumpPower = 0
+    end
     local mouse = UIS:GetMouseLocation()
     local hover = nil
     for i = #drawHits, 1, -1 do
@@ -5472,6 +5450,7 @@ end)
 connect(RunService.RenderStepped, renderDraw)
 
 function drawShutdown()
+    if GENV.__NexusSetSearch then pcall(GENV.__NexusSetSearch, false) end
     for _, obj in ipairs(drawPool) do
         pcall(function() obj:Remove() end)
     end
