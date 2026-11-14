@@ -10,6 +10,7 @@ local PLAYER = Players.LocalPlayer
 local GENV = (type(getgenv) == "function" and getgenv()) or _G
 
 local VERSION = "2.0.1"
+GENV.__NexusDiscord = "https://discord.gg/MTf3F56QH"
 
 -- ==================== UNSUPPORTED GAME GUARD ====================
 -- NexusTAS needs a standard R6 character with Roblox's default Animator. If the
@@ -88,7 +89,7 @@ do
         warn(log)
         print(log)
 
-        local discordInvite = ""
+        local discordInvite = GENV.__NexusDiscord or ""
         local parent
         pcall(function() parent = gethui and gethui() end)
         if not parent then
@@ -478,10 +479,14 @@ do
         join.MouseButton1Click:Connect(function()
             local invite = GENV.__NexusDiscord
             if type(invite) == "string" and invite ~= "" then
-                if type(setclipboard) == "function" then
+                local opened = false
+                pcall(function()
+                    opened = game:GetService("GuiService"):OpenBrowserWindow(invite)
+                end)
+                if not opened and type(setclipboard) == "function" then
                     pcall(setclipboard, invite)
                 end
-                loader.log("Discord link copied to clipboard")
+                loader.log(opened and "Opening Discord..." or "Discord link copied to clipboard")
             else
                 loader.log("Discord link is not configured yet")
             end
@@ -2690,12 +2695,12 @@ local function refreshSavedRuns()
                             if legacyOnly and baseName:sub(1, #FILE_PREFIX) ~= FILE_PREFIX then
                                 continue
                             end
-                            if baseName == "index.json" or baseName == "settings.json" then
-                                continue
-                            end
                             local name = baseName:sub(1, -6)
                             if name:sub(1, #FILE_PREFIX) == FILE_PREFIX then
                                 name = name:sub(#FILE_PREFIX + 1)
+                            end
+                            if name == "index" or name == "settings" then
+                                continue
                             end
                             addRun(fullPath(entry, rel), name, folder)
                         end
@@ -5077,6 +5082,20 @@ task.spawn(function()
         end)
     end
 end)
+
+if _G.__NexusDebug then
+    _G.__NexusDebug.beginCreate = function() enterCreate() end
+    _G.__NexusDebug.beginRecord = function() unpauseNow() end
+    _G.__NexusDebug.pauseRecord = function() pauseNow() end
+    _G.__NexusDebug.beginTest = function() enterTest() end
+    _G.__NexusDebug.goIdle = function() goIdle() end
+    _G.__NexusDebug.folder = function(name)
+        if type(name) == "string" and name ~= "" then
+            GENV.__NexusStore.folder = name
+        end
+        return GENV.__NexusStore and GENV.__NexusStore.folder
+    end
+end
 
 setupGui()
 
