@@ -9,7 +9,7 @@ local HttpService = game:GetService("HttpService")
 local PLAYER = Players.LocalPlayer
 local GENV = (type(getgenv) == "function" and getgenv()) or _G
 
-local VERSION = "2.0.1"
+local VERSION = "2.0.3"
 GENV.__NexusDiscord = "https://discord.gg/MTf3F56QH"
 
 -- ==================== UNSUPPORTED GAME GUARD ====================
@@ -5163,7 +5163,7 @@ local function buildMenuPrimitives()
     elseif drawTab == "info" then
         local sections = {
             {
-                "WHAT'S NEW",
+                "WHAT'S NEW IN " .. VERSION,
                 {
                     "Brand-new ClickGUI with sidebar and cards",
                     "Instant search: settings, binds and runs",
