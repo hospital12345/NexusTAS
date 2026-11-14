@@ -5161,43 +5161,80 @@ local function buildMenuPrimitives()
             txt(cx, cy + (i - 1) * 16, 11, line, COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
         end
     elseif drawTab == "info" then
-        local lines = {
-            "NexusTAS " .. VERSION, "",
-            "WHAT'S NEW",
-            "- Relative Test: start playback where you stand",
-            "- Y Offset: lower playback height",
-            "- Folder dropdown for organizing runs",
-            "- FPS is saved with every run",
-            "- Menu search and six themes",
-            "- Settings save automatically", "",
-            "TIPS",
-            "- Y Offset only affects playback",
-            "- R6 is required for recording",
-            "- Export/Import uses the clipboard",
-            "- Re-injecting replaces the old instance",
+        local sections = {
+            {
+                "WHAT'S NEW",
+                {
+                    "Brand-new ClickGUI with sidebar and cards",
+                    "Instant search: settings, binds and runs",
+                    "Six themes, switchable in one click",
+                    "Relative Test: playback starts where you stand",
+                    "Y Offset: lower playback height on the fly",
+                    "Folder dropdown keeps runs organized",
+                    "FPS saved per run with a mismatch warning",
+                    "Settings, binds and theme save automatically",
+                },
+            },
+            {
+                "WHY NEXUSTAS",
+                {
+                    "Frame-accurate stepping with real physics",
+                    "Ghost Mode records on a clone, not you",
+                    "Safe Test walks you to the START marker",
+                    "Camera stays locked while stepping a run",
+                    "Interpolated playback for smooth motion",
+                    "Runs are plain JSON: export, import, share",
+                    "Lightweight loader, can be disabled",
+                    "No hidden state: everything lives in NexusTAS/",
+                },
+            },
+            {
+                "GOOD TO KNOW",
+                {
+                    "Menu key: M",
+                    "Recording needs an R6 character",
+                    "Y Offset affects playback only",
+                    "Re-injecting replaces the old instance",
+                },
+            },
         }
-        for i, line in ipairs(lines) do
-            txt(cx, cy + (i - 1) * 17, 11, line, COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
+
+        local ly = cy
+        txt(cx, ly, 14, "NexusTAS " .. VERSION, COL.text,
+            Drawing.Fonts.UI, 0, 21, false, true)
+        ly += 24
+
+        for _, section in ipairs(sections) do
+            txt(cx, ly, 10, section[1], COL.accent,
+                Drawing.Fonts.UI, 0, 21, false, true)
+            ly += 17
+            for _, item in ipairs(section[2]) do
+                txt(cx + 4, ly, 10, "- " .. item, COL.subtext,
+                    Drawing.Fonts.UI, 0, 21, false, true)
+                ly += 15
+            end
+            ly += 7
         end
     end
 
-    local yBar = y + h - 64
-    sq(cx, yBar, cw, 40, COL.row, 0.08, 12, true)
-    txt(cx + 10, yBar + 6, 11, "Y Offset (lower)", COL.text,
-        Drawing.Fonts.UI, 0, 21, false, true)
-    txt(cx + 10, yBar + 22, 8, "Don't touch unless you know what this does.",
-        COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
-    drawButton("yoff_minus", cx + cw - 104, yBar + 9, 24, 18, "-", function()
-        settings.yOffset = math.clamp(round((settings.yOffset or 0) - 0.5, 10), -50, 50)
-        if STORE and STORE.saveSettings then STORE.saveSettings() end
-    end)
-    drawButton("yoff_plus", cx + cw - 34, yBar + 9, 24, 18, "+", function()
-        settings.yOffset = math.clamp(round((settings.yOffset or 0) + 0.5, 10), -50, 50)
-        if STORE and STORE.saveSettings then STORE.saveSettings() end
-    end)
-    txt(cx + cw - 65, yBar + 12, 10, string.format("%.1f", settings.yOffset or 0),
-        COL.text, Drawing.Fonts.Monospace, 0, 21, false, true)
-
+    if drawTab == "player" then
+        local yBar = y + h - 64
+        sq(cx, yBar, cw, 40, COL.row, 0.08, 12, true)
+        txt(cx + 10, yBar + 6, 11, "Y Offset (lower)", COL.text,
+            Drawing.Fonts.UI, 0, 21, false, true)
+        txt(cx + 10, yBar + 22, 8, "Don't touch unless you know what this does.",
+            COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
+        drawButton("yoff_minus", cx + cw - 104, yBar + 9, 24, 18, "-", function()
+            settings.yOffset = math.clamp(round((settings.yOffset or 0) - 0.5, 10), -50, 50)
+            if STORE and STORE.saveSettings then STORE.saveSettings() end
+        end)
+        drawButton("yoff_plus", cx + cw - 34, yBar + 9, 24, 18, "+", function()
+            settings.yOffset = math.clamp(round((settings.yOffset or 0) + 0.5, 10), -50, 50)
+            if STORE and STORE.saveSettings then STORE.saveSettings() end
+        end)
+        txt(cx + cw - 65, yBar + 12, 10, string.format("%.1f", settings.yOffset or 0),
+            COL.text, Drawing.Fonts.Monospace, 0, 21, false, true)
+    end
     local footer = statusText
     if ghost.active then footer = footer .. "  [GHOST]" end
     txt(cx, y + h - 20, 10, footer, COL.subtext, Drawing.Fonts.UI, 0, 21, false, true)
